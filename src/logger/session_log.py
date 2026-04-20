@@ -6,8 +6,7 @@ from pathlib import Path
 
 class SessionLogger:
     """
-    以 JSONL 格式记录会话日志。
-    日志是复盘（"哪一轮开始不像她"）的核心工具，不是可选项。
+    以 JSONL 格式记录会话日志，便于后续回放和排查角色偏移。
     """
 
     def __init__(self, log_dir: str = "logs") -> None:
@@ -56,16 +55,16 @@ class SessionLogger:
         current_streak = 1
         last_mood = None
 
-        for r in self._records:
-            mood_counts[r["mood_after"]] += 1
-            if r["flagged"]:
+        for record in self._records:
+            mood_counts[record["mood_after"]] += 1
+            if record["flagged"]:
                 flagged_count += 1
-            if r["mood_after"] == last_mood:
+            if record["mood_after"] == last_mood:
                 current_streak += 1
             else:
                 max_streak = max(max_streak, current_streak)
                 current_streak = 1
-                last_mood = r["mood_after"]
+                last_mood = record["mood_after"]
             max_streak = max(max_streak, current_streak)
 
         print("\n========== 会话摘要 ==========")

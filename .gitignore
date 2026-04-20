@@ -3,23 +3,41 @@ __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
 .Python
 
-# 仮想環境
+# 虚拟环境
 .venv/
 venv/
 env/
 
-# 環境変数（APIキーを含む）
+# 环境变量（含 API Key，禁止提交）
 .env
 
-# ログ（.gitkeep を除く）
+# 日志（保留目录结构，忽略内容）
 logs/*.jsonl
+logs/*.log
 
 # IDE
 .vscode/
 .idea/
+*.swp
+*.swo
 
 # OS
 .DS_Store
 Thumbs.db
+desktop.ini
+
+# 测试 & 覆盖率
+.pytest_cache/
+.coverage
+htmlcov/
+
+# mypy / ruff
+.mypy_cache/
+.ruff_cache/

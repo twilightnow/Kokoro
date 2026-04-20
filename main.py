@@ -16,16 +16,24 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from src.capability.llm import ClaudeClient
+from src.capability.llm import create_llm_client
 from src.logger.session_log import SessionLogger
 from src.memory.working_memory import WorkingMemory
 from src.personality.emotion import EmotionState
 from src.personality.loader import load_character
 from src.personality.prompt_builder import build_system_prompt
 
-load_dotenv()
+_ENV_PATH = Path(__file__).resolve().with_name(".env")
+load_dotenv(dotenv_path=_ENV_PATH)
 
 _CHARACTER_PATH = Path("characters/asuka/personality.yaml")
+
+
+def _configure_stdio() -> None:
+    for stream_name in ("stdin", "stdout", "stderr"):
+        stream = getattr(sys, stream_name, None)
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
 
 
 def _check_forbidden(reply: str, forbidden_words: list) -> bool:
@@ -37,7 +45,7 @@ def run_conversation(debug: bool) -> None:
     state = EmotionState()
     memory = WorkingMemory(max_rounds=10)
     try:
-        llm = ClaudeClient()
+        llm = create_llm_client()
     except EnvironmentError as e:
         print(f"错误: {e}", file=sys.stderr)
         sys.exit(1)
@@ -87,7 +95,11 @@ def run_conversation(debug: bool) -> None:
                 print(f"[DEBUG] system prompt（前200字）: {system_prompt[:200]}...")
                 print(f"[DEBUG] history 长度: {len(memory)} 条")
 
-            reply = llm.chat(system_prompt, memory.get_messages())
+            try:
+                reply = llm.chat(system_prompt, memory.get_messages())
+            except RuntimeError as e:
+                print(f"错误: {e}", file=sys.stderr)
+                break
             memory.add("assistant", reply)
 
             flagged = _check_forbidden(reply, config.forbidden_words)
@@ -142,8 +154,9 @@ def run_replay(log_file: str) -> None:
 
 
 def main() -> None:
+    _configure_stdio()
     parser = argparse.ArgumentParser(
-        description="Kokoro — 桌面AI人格伴侣平台 CLI Demo（明日香）"
+        description="Kokoro – 桌面AI人格伴侣平台 CLI Demo（明日香）"
     )
     parser.add_argument("--debug", action="store_true", help="启用调试模式")
     parser.add_argument("--replay", metavar="LOG_FILE", help="回放指定会话日志")

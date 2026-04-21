@@ -13,6 +13,12 @@ class PerceptionContext:
     active_window_title: str = ""
     is_user_active: bool = True
     hour: int = 0
+    idle_seconds: float = 0.0
+    """距最后键鼠操作的秒数。"""
+    switches_per_minute: float = 0.0
+    """最近1分钟窗口切换频率。"""
+    is_gaming: bool = False
+    """是否在游戏（基于窗口标题粗判）。"""
 
     @classmethod
     def capture(cls) -> "PerceptionContext":
@@ -38,3 +44,4 @@ class PerceptionContext:
             return "晚上"
         else:
             return "深夜"
+

@@ -9,16 +9,44 @@ _REQUIRED_TOP_FIELDS = ("name", "emotion_triggers", "forbidden_words")
 
 
 def validate_character(config: CharacterConfig) -> None:
-    """角色設定完整性検証。必須フィールド欠如時に ValueError を発生。"""
+    """角色配置完整性校验。字段缺失或类型错误时抛出 ValueError，可选字段为空时打印警告。"""
     errors = []
+    warnings = []
+
+    # 必填项
     if not config.name:
-        errors.append("name: 必須项不能为空")
+        errors.append("name: 必填项不能为空")
     if not isinstance(config.emotion_triggers, dict):
-        errors.append("emotion_triggers: 必須为字典类型")
+        errors.append("emotion_triggers: 必须为字典类型，格式: {情绪名: [触发词, ...]}")
+    elif not config.emotion_triggers:
+        warnings.append("emotion_triggers 为空，情绪状态机将不会被触发")
     if not isinstance(config.forbidden_words, list):
-        errors.append("forbidden_words: 必須为列表类型")
+        errors.append("forbidden_words: 必须为列表类型")
+    if not isinstance(config.mood_expressions, dict):
+        errors.append("mood_expressions: 必须为字典类型，格式: {情绪名: 描述}")
+
+    # 可选但建议填写的字段
+    if not config.behavior_rules:
+        warnings.append("behavior_rules 为空，角色行为约束将不生效")
+    if not config.verbal_habits:
+        warnings.append("verbal_habits 为空，角色将没有口头禅")
+    p = config.personality
+    if not any([p.core_fear, p.surface_trait, p.hidden_trait]):
+        warnings.append("personality 三项（core_fear / surface_trait / hidden_trait）均为空，人格深度将严重不足")
+
+    # emotion_triggers 中的情绪名建议与 mood_expressions 对齐
+    if isinstance(config.emotion_triggers, dict) and isinstance(config.mood_expressions, dict):
+        unknown = set(config.emotion_triggers) - set(config.mood_expressions)
+        if unknown:
+            warnings.append(
+                f"emotion_triggers 中的情绪 {sorted(unknown)} 在 mood_expressions 中没有对应描述"
+            )
+
     if errors:
         raise ValueError("角色配置校验失败:\n" + "\n".join(f"  - {e}" for e in errors))
+
+    for w in warnings:
+        print(f"[警告] 角色配置: {w}")
 
 
 def load_character(yaml_path: Union[str, Path]) -> CharacterConfig:

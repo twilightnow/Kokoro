@@ -28,10 +28,14 @@ def _configure_stdio() -> None:
             stream.reconfigure(encoding="utf-8")
 
 
-def run_conversation(debug: bool) -> None:
+def run_conversation(debug: bool, enable_perception: bool = False) -> None:
     from src.application.conversation_service import ConversationService
 
-    service = ConversationService(character_path=_CHARACTER_PATH, debug=debug)
+    service = ConversationService(
+        character_path=_CHARACTER_PATH,
+        debug=debug,
+        enable_perception=enable_perception,
+    )
     service.run()
 
 
@@ -79,12 +83,13 @@ def main() -> None:
     )
     parser.add_argument("--debug", action="store_true", help="启用调试模式")
     parser.add_argument("--replay", metavar="LOG_FILE", help="回放指定会话日志")
+    parser.add_argument("--perception", action="store_true", help="启用感知层（窗口监听/空闲检测）")
     args = parser.parse_args()
 
     if args.replay:
         run_replay(args.replay)
     else:
-        run_conversation(args.debug)
+        run_conversation(args.debug, enable_perception=args.perception)
 
 
 if __name__ == "__main__":

@@ -8,6 +8,17 @@ from .emotion import EmotionState
 from ..memory.context import MemoryContext
 from ..perception.context import PerceptionContext
 
+# 触发告警的 token 估算阈值
+_PROMPT_TOKEN_WARN = 600
+_PROMPT_TOKEN_HARD = 1200
+
+
+def estimate_tokens(text: str) -> int:
+    """粗略估算 token 数。
+    中文约 1.5 字/token，英文约 4 字/token，此处用字符数 / 1.5 作为混合文本的保守估算。
+    """
+    return max(1, int(len(text) / 1.5))
+
 
 @dataclass
 class PromptContext:
@@ -64,9 +75,16 @@ def build_system_prompt(ctx: PromptContext) -> str:
     if ctx.perception:
         parts.append("")
         parts.append("【当前场景】")
-        parts.append(f"时间段：{ctx.perception.time_of_day}")
-        if ctx.perception.is_late_night:
+        p = ctx.perception
+        parts.append(f"时间段：{p.time_of_day}")
+        if p.is_late_night:
             parts.append("（深夜）")
+        if p.active_window_title:
+            parts.append(f"当前窗口：{p.active_window_title[:40]}")
+        if p.is_gaming:
+            parts.append("（用户正在游戏）")
+        if not p.is_user_active:
+            parts.append("（用户当前不活跃）")
 
     parts.extend(
         [

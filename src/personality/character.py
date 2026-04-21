@@ -19,8 +19,9 @@ class ProactiveStyle:
 @dataclass
 class CharacterConfig:
     name: str
-    version: str
-    personality: PersonalityConfig
+    version: str = ""
+    schema_version: str = "1"
+    personality: PersonalityConfig = field(default_factory=PersonalityConfig)
     behavior_rules: List[str] = field(default_factory=list)
     proactive_style: ProactiveStyle = field(default_factory=ProactiveStyle)
     forbidden_words: List[str] = field(default_factory=list)

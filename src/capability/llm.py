@@ -1,8 +1,39 @@
+"""
+LLM provider abstraction.
+
+配置方式（.env 文件）：
+
+  LLM_PROVIDER=<provider>   # 必须手动指定（见下方可选值）
+  LLM_MODEL=<model>         # 可选，覆盖该 provider 的默认模型
+
+可用 provider 值：
+  CLI 模式（走平台会员额度，无需 API key，需提前登录对应 CLI）：
+    claude-cli   → claude CLI（claude.ai Pro/Max）
+                   默认模型: sonnet（= claude-sonnet-4-6）
+                   可用: opus / sonnet / haiku，或完整 model ID
+    gemini-cli   → gemini CLI（Google 账号 / Gemini Advanced）
+                   默认模型: gemini-2.5-flash
+                   可用: gemini-3-1-pro / gemini-3-1-flash / gemini-2.5-pro 等
+    codex-cli    → OpenAI Codex CLI（OpenAI 订阅）
+                   默认模型: o4-mini
+                   可用: o3 / o4-mini，或 API 支持的 model ID
+
+  API key 模式（需在 .env 中填写对应 key）：
+    anthropic / claude  → ANTHROPIC_API_KEY
+    openai / gpt        → OPENAI_API_KEY
+    gemini / google     → GEMINI_API_KEY
+    deepseek            → DEEPSEEK_API_KEY
+    openrouter          → OPENROUTER_API_KEY
+    copilot             → GITHUB_TOKEN / GH_TOKEN / COPILOT_GITHUB_TOKEN（任一即可）
+"""
+
 import os
+import shutil
+import subprocess
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Mapping, Optional
+from typing import Dict, List, Mapping, Optional, Tuple
 
 import anthropic
 from dotenv import load_dotenv
@@ -13,34 +44,94 @@ _ENV_PATH = Path(__file__).resolve().parents[2] / ".env"
 load_dotenv(dotenv_path=_ENV_PATH)
 
 
+@dataclass
+class LLMResult:
+    """LLM 调用结果契约。调用方通过 .text 取文本，.input_tokens/.output_tokens 取用量。"""
+
+    text: str
+    model: str
+    provider: str
+    input_tokens: int = 0
+    output_tokens: int = 0
+    finish_reason: str = ""
+
+
+def _get_max_tokens(default: int = 300) -> int:
+    """从 LLM_MAX_TOKENS 环境变量读取最大 token 数，不合法时使用默认值。"""
+    try:
+        return int(os.environ.get("LLM_MAX_TOKENS", default))
+    except (ValueError, TypeError):
+        return default
+
+
 class LLMClient(ABC):
     @abstractmethod
-    def chat(self, system_prompt: str, messages: List[Dict[str, str]]) -> str:
+    def chat(self, system_prompt: str, messages: List[Dict[str, str]]) -> LLMResult:
         pass
 
 
 @dataclass(frozen=True)
 class ProviderConfig:
     name: str
-    api_key_env: str
+    api_key_env: str                                      # 主 key env；空字符串 = CLI 模式
     default_model: str
-    kind: str
+    kind: str                                             # "anthropic" | "openai_compatible" | "claude_cli" | "gemini_cli" | "codex_cli"
     base_url: Optional[str] = None
     default_headers: Mapping[str, str] = field(default_factory=dict)
+    api_key_env_fallbacks: Tuple[str, ...] = field(default_factory=tuple)  # 备用 key env
 
 
-PROVIDER_ALIASES = {
-    "anthropic": "anthropic",
-    "claude": "anthropic",
-    "openai": "openai",
-    "gpt": "openai",
-    "deepseek": "deepseek",
-    "gemini": "gemini",
-    "google": "gemini",
-    "openrouter": "openrouter",
+# ── 别名表 ────────────────────────────────────────────────────────────────────
+
+PROVIDER_ALIASES: Dict[str, str] = {
+    # CLI 模式
+    "claude-cli":    "claude_cli",
+    "claude_cli":    "claude_cli",
+    "claudecli":     "claude_cli",
+    "gemini-cli":    "gemini_cli",
+    "gemini_cli":    "gemini_cli",
+    "geminicli":     "gemini_cli",
+    "codex-cli":     "codex_cli",
+    "codex_cli":     "codex_cli",
+    "codexcli":      "codex_cli",
+    "codex":         "codex_cli",
+    # API key 模式
+    "anthropic":     "anthropic",
+    "claude":        "anthropic",
+    "openai":        "openai",
+    "gpt":           "openai",
+    "gemini":        "gemini",
+    "google":        "gemini",
+    "deepseek":      "deepseek",
+    "openrouter":    "openrouter",
+    "copilot":       "copilot",
+    "github-copilot":"copilot",
+    "githubcopilot": "copilot",
 }
 
-PROVIDER_CONFIGS = {
+# ── Provider 配置表 ───────────────────────────────────────────────────────────
+
+PROVIDER_CONFIGS: Dict[str, ProviderConfig] = {
+    # ── CLI 模式 ─────────────────────────────────────────────────────────────
+    "claude_cli": ProviderConfig(
+        name="claude_cli",
+        api_key_env="",
+        default_model="sonnet",          # 别名，等于 claude-sonnet-4-6
+        kind="claude_cli",
+    ),
+    "gemini_cli": ProviderConfig(
+        name="gemini_cli",
+        api_key_env="",
+        default_model="gemini-2.5-flash",
+        kind="gemini_cli",
+    ),
+    "codex_cli": ProviderConfig(
+        name="codex_cli",
+        api_key_env="",
+        default_model="o4-mini",
+        kind="codex_cli",
+    ),
+    # ── API key 模式 ──────────────────────────────────────────────────────────
     "anthropic": ProviderConfig(
         name="anthropic",
         api_key_env="ANTHROPIC_API_KEY",
@@ -50,15 +141,8 @@ PROVIDER_CONFIGS = {
     "openai": ProviderConfig(
         name="openai",
         api_key_env="OPENAI_API_KEY",
-        default_model="gpt-5-mini",
+        default_model="gpt-4o-mini",
         kind="openai_compatible",
-    ),
-    "deepseek": ProviderConfig(
-        name="deepseek",
-        api_key_env="DEEPSEEK_API_KEY",
-        default_model="deepseek-chat",
-        kind="openai_compatible",
-        base_url="https://api.deepseek.com",
     ),
     "gemini": ProviderConfig(
         name="gemini",
@@ -67,73 +151,240 @@ PROVIDER_CONFIGS = {
         kind="openai_compatible",
         base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
     ),
+    "deepseek": ProviderConfig(
+        name="deepseek",
+        api_key_env="DEEPSEEK_API_KEY",
+        default_model="deepseek-chat",
+        kind="openai_compatible",
+        base_url="https://api.deepseek.com",
+    ),
     "openrouter": ProviderConfig(
         name="openrouter",
         api_key_env="OPENROUTER_API_KEY",
-        default_model="openai/gpt-5-mini",
+        default_model="openai/gpt-4o-mini",
         kind="openai_compatible",
         base_url="https://openrouter.ai/api/v1",
     ),
+    "copilot": ProviderConfig(
+        name="copilot",
+        api_key_env="GITHUB_TOKEN",                      # 主
+        api_key_env_fallbacks=("GH_TOKEN", "COPILOT_GITHUB_TOKEN"),  # 备用
+        default_model="gpt-4.1",
+        kind="openai_compatible",
+        base_url="https://api.githubcopilot.com",
+        default_headers={
+            "editor-version": "vscode/1.99.0",
+            "editor-plugin-version": "copilot/1.0.0",
+            "openai-intent": "conversation-panel",
+        },
+    ),
 }
 
+_CLI_KINDS = {"claude_cli", "gemini_cli", "codex_cli"}
+
+# ── 内部工具函数 ───────────────────────────────────────────────────────────────
 
 def _resolve_api_key(config: ProviderConfig) -> Optional[str]:
-    direct_key = os.environ.get(config.api_key_env)
-    if direct_key:
-        return direct_key
+    if config.kind in _CLI_KINDS:
+        return None
 
-    generic_key = os.environ.get("LLM_API_KEY") or os.environ.get("API_KEY")
-    if generic_key:
-        return generic_key
+    # 主 key
+    key = os.environ.get(config.api_key_env)
+    if key:
+        return key
 
-    configured_provider_keys = [
-        os.environ.get(provider_config.api_key_env)
-        for provider_config in PROVIDER_CONFIGS.values()
-        if os.environ.get(provider_config.api_key_env)
+    # 备用 key（copilot 等多名称 token）
+    for fallback in config.api_key_env_fallbacks:
+        key = os.environ.get(fallback)
+        if key:
+            return key
+
+    # 通用 key
+    key = os.environ.get("LLM_API_KEY") or os.environ.get("API_KEY")
+    if key:
+        return key
+
+    # 只有一个 provider 配置了 key 时自动使用
+    all_keys = [
+        os.environ.get(c.api_key_env)
+        for c in PROVIDER_CONFIGS.values()
+        if c.api_key_env and os.environ.get(c.api_key_env)
     ]
-    if len(configured_provider_keys) == 1:
-        return configured_provider_keys[0]
+    if len(all_keys) == 1:
+        return all_keys[0]
 
     return None
 
 
-def _normalize_provider_name(provider: str) -> str:
-    normalized = PROVIDER_ALIASES.get(provider.lower())
+def _normalize_provider(name: str) -> str:
+    normalized = PROVIDER_ALIASES.get(name.lower())
     if not normalized:
-        supported = ", ".join(sorted(PROVIDER_CONFIGS))
-        raise EnvironmentError(
-            f"不支持的 LLM_PROVIDER: {provider}。可选值: {supported}"
-        )
+        supported = ", ".join(sorted(PROVIDER_ALIASES))
+        raise EnvironmentError(f"不支持的 LLM_PROVIDER: {name!r}。\n可选值: {supported}")
     return normalized
 
 
-def _resolve_provider_name(explicit_provider: Optional[str] = None) -> str:
-    provider = explicit_provider or os.environ.get("LLM_PROVIDER")
-    if provider:
-        return _normalize_provider_name(provider)
+def _resolve_provider_name(explicit: Optional[str] = None) -> str:
+    raw = explicit or os.environ.get("LLM_PROVIDER")
+    if raw:
+        return _normalize_provider(raw)
 
     configured = [
         name
         for name, config in PROVIDER_CONFIGS.items()
-        if os.environ.get(config.api_key_env)
+        if config.api_key_env and os.environ.get(config.api_key_env)
     ]
     if len(configured) == 1:
         return configured[0]
     if len(configured) > 1:
-        options = ", ".join(configured)
         raise EnvironmentError(
-            "检测到多个可用的 API key。请在 .env 中设置 LLM_PROVIDER 明确选择供应商。"
-            f"当前可用: {options}"
+            f"检测到多个可用 API key，请在 .env 中设置 LLM_PROVIDER 明确指定。\n"
+            f"当前可用: {', '.join(configured)}"
         )
-
-    expected_keys = ", ".join(
-        config.api_key_env for config in PROVIDER_CONFIGS.values()
-    )
     raise EnvironmentError(
-        "未检测到可用的 LLM API key。"
-        f"请在 .env 中配置以下任一变量: {expected_keys}"
+        "未检测到可用的 LLM 配置。\n"
+        "请在 .env 中设置 LLM_PROVIDER，可选值见 llm.py 顶部注释。"
     )
 
+
+# ── CLI 基类 ──────────────────────────────────────────────────────────────────
+
+class _BaseCLIClient(LLMClient):
+    CLI_CMD: str = ""
+    TIMEOUT: int = 120
+
+    def __init__(self, config: ProviderConfig, model: Optional[str] = None) -> None:
+        if not shutil.which(self.CLI_CMD):
+            raise EnvironmentError(
+                f"未找到 {self.CLI_CMD!r} 命令。{self._install_hint()}"
+            )
+        self.provider = config.name
+        self.model = model or os.environ.get("LLM_MODEL") or config.default_model
+
+    def _install_hint(self) -> str:
+        return ""
+
+    def _run(
+        self,
+        cmd: List[str],
+        stdin_text: Optional[str] = None,
+    ) -> str:
+        try:
+            result = subprocess.run(
+                cmd,
+                input=stdin_text,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                timeout=self.TIMEOUT,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(f"{self.CLI_CMD} 响应超时（{self.TIMEOUT}s）") from exc
+        except FileNotFoundError as exc:
+            raise RuntimeError(f"{self.CLI_CMD!r} 不可用，请检查 PATH") from exc
+
+        if result.returncode != 0:
+            stderr = result.stderr.strip()
+            if any(kw in stderr.lower() for kw in ("not logged in", "auth", "login", "sign in", "unauthenticated")):
+                raise RuntimeError(f"{self.CLI_CMD} 未登录。{self._login_hint()}")
+            raise RuntimeError(f"{self.CLI_CMD} 返回错误 (exit {result.returncode}): {stderr}")
+
+        return result.stdout.strip()
+
+    def _login_hint(self) -> str:
+        return ""
+
+    def chat(self, system_prompt: str, messages: List[Dict[str, str]]) -> LLMResult:
+        text = self._get_reply_text(system_prompt, messages)
+        return LLMResult(text=text, model=self.model, provider=self.provider)
+
+    def _get_reply_text(self, system_prompt: str, messages: List[Dict[str, str]]) -> str:
+        raise NotImplementedError
+
+
+# ── CLI 实现 ──────────────────────────────────────────────────────────────────
+
+class ClaudeCodeCLIClient(_BaseCLIClient):
+    """claude CLI — 消耗 claude.ai Pro/Max 会员额度。
+
+    非交互模式：claude -p "<message>" --model <model> --system-prompt "<system>"
+    模型别名：opus / sonnet / haiku（claude-opus-4-7 / claude-sonnet-4-6 / claude-haiku-4-5）
+    """
+
+    CLI_CMD = "claude"
+
+    def _install_hint(self) -> str:
+        return "请安装 Claude Code：npm install -g @anthropic-ai/claude-code"
+
+    def _login_hint(self) -> str:
+        return "请先运行 `claude` 完成登录。"
+
+    def _get_reply_text(self, system_prompt: str, messages: List[Dict[str, str]]) -> str:
+        user_text = "\n\n".join(
+            f"{'User' if m['role'] == 'user' else 'Assistant'}: {m['content']}"
+            for m in messages
+        )
+        cmd = [
+            "claude", "-p", user_text,
+            "--model", self.model,
+            "--system-prompt", system_prompt,
+        ]
+        return self._run(cmd)
+
+
+class GeminiCLIClient(_BaseCLIClient):
+    """gemini CLI — 消耗 Google 账号 / Gemini Advanced 会员额度。
+
+    非交互模式：通过 stdin 传入 prompt（gemini CLI 无 --prompt 标志）
+    模型示例：gemini-2.5-flash / gemini-2.5-pro / gemini-3-1-flash / gemini-3-1-pro
+    """
+
+    CLI_CMD = "gemini"
+
+    def _install_hint(self) -> str:
+        return "请安装 Gemini CLI：npm install -g @google/gemini-cli"
+
+    def _login_hint(self) -> str:
+        return "请先运行 `gemini` 完成 Google 账号授权。"
+
+    def _get_reply_text(self, system_prompt: str, messages: List[Dict[str, str]]) -> str:
+        user_text = "\n\n".join(
+            f"{'User' if m['role'] == 'user' else 'Assistant'}: {m['content']}"
+            for m in messages
+        )
+        combined = f"{system_prompt}\n\n{user_text}"
+        cmd = ["gemini", "--model", self.model]
+        return self._run(cmd, stdin_text=combined)
+
+
+class CodexCLIClient(_BaseCLIClient):
+    """OpenAI Codex CLI — 消耗 OpenAI 订阅额度。
+
+    非交互模式：codex -m <model> exec "<prompt>"
+    模型示例：gpt-5.4 / gpt-5.4-mini / gpt-5.3-codex
+    注意：Codex CLI 主要面向编程任务（可读写文件、执行命令），
+          此处仅以 exec 模式做单次对话，system prompt 拼入任务文本。
+    """
+
+    CLI_CMD = "codex"
+
+    def _install_hint(self) -> str:
+        return "请安装 OpenAI Codex CLI：npm install -g @openai/codex"
+
+    def _login_hint(self) -> str:
+        return "请先运行 `codex login` 或在 .env 中设置 OPENAI_API_KEY。"
+
+    def _get_reply_text(self, system_prompt: str, messages: List[Dict[str, str]]) -> str:
+        user_text = "\n\n".join(
+            f"{'User' if m['role'] == 'user' else 'Assistant'}: {m['content']}"
+            for m in messages
+        )
+        task = f"[System]\n{system_prompt}\n\n[Conversation]\n{user_text}"
+        cmd = ["codex", "-m", self.model, "exec", task]
+        return self._run(cmd)
+
+
+# ── API key 实现 ───────────────────────────────────────────────────────────────
 
 class AnthropicClient(LLMClient):
     MAX_TOKENS = 1024
@@ -141,30 +392,37 @@ class AnthropicClient(LLMClient):
     def __init__(self, config: ProviderConfig, model: Optional[str] = None) -> None:
         api_key = _resolve_api_key(config)
         if not api_key:
-            raise EnvironmentError(
-                f"{config.api_key_env} 未设置。"
-                "请检查 .env 文件，或设置 LLM_API_KEY / API_KEY。"
-            )
+            raise EnvironmentError(f"{config.api_key_env} 未设置。请检查 .env 文件。")
         self.provider = config.name
         self.model = model or os.environ.get("LLM_MODEL") or config.default_model
         self._client = anthropic.Anthropic(api_key=api_key)
 
-    def chat(self, system_prompt: str, messages: List[Dict[str, str]]) -> str:
+    def chat(self, system_prompt: str, messages: List[Dict[str, str]]) -> LLMResult:
         try:
             response = self._client.messages.create(
                 model=self.model,
-                max_tokens=self.MAX_TOKENS,
+                max_tokens=_get_max_tokens(),
                 system=system_prompt,
                 messages=messages,
             )
         except anthropic.AuthenticationError as exc:
-            raise RuntimeError(
-                "Anthropic 鉴权失败：当前 ANTHROPIC_API_KEY 无效。"
-                "请在 .env 中填入有效的 Anthropic Console API key。"
-            ) from exc
+            raise RuntimeError("Anthropic 鉴权失败：ANTHROPIC_API_KEY 无效。") from exc
+        except anthropic.RateLimitError as exc:
+            raise RuntimeError("Anthropic API 触发速率限制，请稍后重试。") from exc
+        except Exception as exc:
+            raise RuntimeError(f"Anthropic API 调用失败: {exc}") from exc
 
-        text_parts = [block.text for block in response.content if block.type == "text"]
-        return "".join(text_parts).strip()
+        text = "".join(
+            block.text for block in response.content if block.type == "text"
+        ).strip()
+        return LLMResult(
+            text=text,
+            model=self.model,
+            provider=self.provider,
+            input_tokens=response.usage.input_tokens,
+            output_tokens=response.usage.output_tokens,
+            finish_reason=response.stop_reason or "",
+        )
 
 
 class OpenAICompatibleClient(LLMClient):
@@ -173,63 +431,82 @@ class OpenAICompatibleClient(LLMClient):
     def __init__(self, config: ProviderConfig, model: Optional[str] = None) -> None:
         api_key = _resolve_api_key(config)
         if not api_key:
+            all_envs = [config.api_key_env, *config.api_key_env_fallbacks]
             raise EnvironmentError(
-                f"{config.api_key_env} 未设置。"
-                "请检查 .env 文件，或设置 LLM_API_KEY / API_KEY。"
+                f"未找到 {config.name} 的 API key。\n"
+                f"请在 .env 中设置以下任一变量: {', '.join(all_envs)}"
             )
 
         headers = dict(config.default_headers)
-        referer = os.environ.get("OPENROUTER_HTTP_REFERER")
-        title = os.environ.get("OPENROUTER_APP_TITLE")
         if config.name == "openrouter":
-            if referer:
+            if referer := os.environ.get("OPENROUTER_HTTP_REFERER"):
                 headers["HTTP-Referer"] = referer
-            if title:
+            if title := os.environ.get("OPENROUTER_APP_TITLE"):
                 headers["X-Title"] = title
 
         self.provider = config.name
         self.model = model or os.environ.get("LLM_MODEL") or config.default_model
-        client_kwargs = {"api_key": api_key}
+
+        client_kwargs: Dict = {"api_key": api_key}
         if config.base_url:
             client_kwargs["base_url"] = config.base_url
         if headers:
             client_kwargs["default_headers"] = headers
         self._client = OpenAI(**client_kwargs)
 
-    def chat(self, system_prompt: str, messages: List[Dict[str, str]]) -> str:
+    def chat(self, system_prompt: str, messages: List[Dict[str, str]]) -> LLMResult:
         request_messages = [{"role": "system", "content": system_prompt}, *messages]
         try:
             response = self._client.chat.completions.create(
                 model=self.model,
                 messages=request_messages,
-                max_completion_tokens=self.MAX_TOKENS,
+                max_completion_tokens=_get_max_tokens(),
             )
         except OpenAIAuthenticationError as exc:
-            env_name = PROVIDER_CONFIGS[self.provider].api_key_env
+            config = PROVIDER_CONFIGS[self.provider]
+            all_envs = [config.api_key_env, *config.api_key_env_fallbacks]
             raise RuntimeError(
-                f"{self.provider} 鉴权失败：当前 {env_name} 无效。"
-                "请在 .env 中填入对应供应商的有效 API key。"
+                f"{self.provider} 鉴权失败：{' / '.join(all_envs)} 无效。"
             ) from exc
+        except Exception as exc:
+            raise RuntimeError(f"{self.provider} API 调用失败: {exc}") from exc
 
         content = response.choices[0].message.content
         if isinstance(content, str):
-            return content.strip()
-        if isinstance(content, list):
-            text_parts = []
-            for item in content:
-                text_value = getattr(item, "text", None)
-                if text_value:
-                    text_parts.append(text_value)
-            return "".join(text_parts).strip()
-        return ""
+            text = content.strip()
+        elif isinstance(content, list):
+            text = "".join(getattr(item, "text", "") for item in content).strip()
+        else:
+            text = ""
+        usage = response.usage
+        return LLMResult(
+            text=text,
+            model=self.model,
+            provider=self.provider,
+            input_tokens=usage.prompt_tokens if usage else 0,
+            output_tokens=usage.completion_tokens if usage else 0,
+            finish_reason=response.choices[0].finish_reason or "",
+        )
+
+
+# ── 工厂函数 ──────────────────────────────────────────────────────────────────
+
+_CLI_CLIENT_MAP = {
+    "claude_cli": ClaudeCodeCLIClient,
+    "gemini_cli": GeminiCLIClient,
+    "codex_cli":  CodexCLIClient,
+}
 
 
 def create_llm_client(
     provider: Optional[str] = None,
     model: Optional[str] = None,
 ) -> LLMClient:
-    resolved_provider = _resolve_provider_name(provider)
-    config = PROVIDER_CONFIGS[resolved_provider]
+    resolved = _resolve_provider_name(provider)
+    config = PROVIDER_CONFIGS[resolved]
+
+    if config.kind in _CLI_KINDS:
+        return _CLI_CLIENT_MAP[resolved](config=config, model=model)
     if config.kind == "anthropic":
         return AnthropicClient(config=config, model=model)
     return OpenAICompatibleClient(config=config, model=model)

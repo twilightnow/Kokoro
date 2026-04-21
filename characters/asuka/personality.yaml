@@ -1,5 +1,6 @@
 name: "惣流·明日香·兰格雷"
 version: "1.0.0"
+schema_version: "1"
 
 personality:
   core_fear: "被需要但不被真正理解，依赖别人但无法承认"

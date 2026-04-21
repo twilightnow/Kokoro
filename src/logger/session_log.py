@@ -1,7 +1,15 @@
 import json
+import os
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
+from typing import Dict, Optional
+
+
+def _default_log_dir() -> Path:
+    """KOKORO_DATA_DIR 環境変数をもとにログディレクトリを解決する。"""
+    data_dir = Path(os.environ.get("KOKORO_DATA_DIR", "./data"))
+    return data_dir / "logs"
 
 
 class SessionLogger:
@@ -9,8 +17,11 @@ class SessionLogger:
     以 JSONL 格式记录会话日志，便于后续回放和排查角色偏移。
     """
 
-    def __init__(self, log_dir: str = "logs") -> None:
-        self._log_dir = Path(log_dir)
+    def __init__(self, log_dir: Optional[str] = None) -> None:
+        if log_dir is not None:
+            self._log_dir = Path(log_dir)
+        else:
+            self._log_dir = _default_log_dir()
         self._log_dir.mkdir(parents=True, exist_ok=True)
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         self._log_path = self._log_dir / f"session_{ts}.jsonl"
@@ -29,8 +40,9 @@ class SessionLogger:
         persist_count: int,
         reply: str,
         flagged: bool,
+        usage: Optional[Dict] = None,
     ) -> None:
-        record = {
+        record: Dict = {
             "turn": turn,
             "timestamp": datetime.now().isoformat(),
             "user_input": user_input,
@@ -40,6 +52,8 @@ class SessionLogger:
             "reply": reply,
             "flagged": flagged,
         }
+        if usage:
+            record["usage"] = usage
         self._records.append(record)
         with open(self._log_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")

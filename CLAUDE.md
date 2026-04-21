@@ -18,7 +18,7 @@ python main.py --replay logs/<file>.jsonl  # 回放会话
 - **情绪状态机** 在 `src/personality/emotion.py`：`update()` 触发词匹配 → 情绪迁移；无命中则 `decay()`
 - **System prompt** 由 `src/personality/prompt_builder.py` 在每轮对话时动态构建，包含当前情绪
 - **工作记忆** (`src/memory/working_memory.py`) 上限 `max_rounds=10`，截断在每轮发送前执行
-- **LLM 调用** 封装在 `src/capability/llm.py`，读取 `ANTHROPIC_API_KEY` 环境变量
+- **LLM 调用** 封装在 `src/capability/llm.py`；provider 通过 `.env` 中的 `LLM_PROVIDER` 指定，支持 API key 模式（anthropic / openai / gemini / deepseek / openrouter / copilot）和 CLI 模式（claude-cli / gemini-cli）
 - **日志** 写入 `logs/`，每次运行独立 JSONL 文件，`session_log.py` 负责写入与摘要
 
 ## 开发规范
@@ -27,11 +27,11 @@ python main.py --replay logs/<file>.jsonl  # 回放会话
 - 新增角色时只需新建 `characters/<name>/personality.yaml`，无需修改 `src/`
 - `personality.yaml` 必须包含 `name`、`emotion_triggers`、`forbidden_words` 字段
 - 情绪类型由 `emotion.py` 的枚举定义，新增情绪需同步修改 `prompt_builder.py`
-- `ClaudeClient` 使用 `claude-sonnet-4-6`，切换模型只改 `llm.py`
+- 切换 provider 只改 `.env` 中的 `LLM_PROVIDER`，切换模型只改 `LLM_MODEL`，不需要动代码
 
 ## 依赖
 
-```
+```text
 anthropic>=0.40.0
 pyyaml>=6.0
 python-dotenv>=1.0.0

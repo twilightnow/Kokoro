@@ -22,6 +22,12 @@ created: 2026-04-20
 - **不负责**：人格判断、记忆存储、感知采集
 - **约束**：UI 只负责展示和交互，所有角色逻辑由 Python 侧决定
 
+### 编码边界
+
+- UI 不直接 import Python 核心模块的数据文件或业务逻辑，只通过协议层通信。
+- 先定义应用服务接口，再决定使用 HTTP、IPC 还是 sidecar，避免传输方式反向绑死架构。
+- UI 事件只表达用户意图，如"发送输入"、"切换模式"、"接受主动介入"，不承载人格策略。
+
 ---
 
 ## 技术选型
@@ -33,7 +39,7 @@ created: 2026-04-20
 | Live2D 渲染 | pixi-live2d-display | MIT |
 | 3D 立绘备选 | three-vrm | MIT |
 
-**运行时架构**：Tauri → IPC → Python FastAPI sidecar（Python 侧负责核心逻辑，前端只做展示）
+**推荐运行时架构**：Tauri → 传输适配层（IPC / HTTP）→ Python application service（Python 侧负责核心逻辑，前端只做展示）
 
 ---
 
@@ -54,7 +60,7 @@ created: 2026-04-20
 CLI 阶段不引入 Tauri 和 FastAPI sidecar。此阶段 UI 层任务：
 
 - [ ] 确认 Python 核心逻辑（人格层、记忆层、感知层）不依赖任何 UI 框架
-- [ ] 设计 IPC 协议草案（定义消息格式，不实现），便于 Phase 4 接入
+- [ ] 设计 UI 协议草案（定义消息格式，不实现），便于 Phase 4 接入
 
 ---
 
@@ -62,11 +68,12 @@ CLI 阶段不引入 Tauri 和 FastAPI sidecar。此阶段 UI 层任务：
 
 目标：把 CLI 原型升级为真正的桌面常驻应用，保持"低打扰"和"人格优先"。
 
-### 4.1 Python 侧 FastAPI Sidecar
+### 4.1 Python 侧应用服务与传输适配
 
 任务：
 
-- [ ] 在 Python 侧实现 `src/server/app.py`：FastAPI 应用，暴露以下端点：
+- [ ] 先抽 `application service`，统一封装聊天、状态查询、主动介入入口
+- [ ] 再基于该 service 实现 `src/server/app.py` 或等价传输适配层，暴露以下端点：
   - `POST /chat`：接收用户输入，返回角色回复 + 情绪状态
   - `GET /state`：返回当前情绪状态和活跃场景
   - `POST /trigger`：外部触发主动介入（感知层调用）
@@ -101,6 +108,7 @@ CLI 阶段不引入 Tauri 和 FastAPI sidecar。此阶段 UI 层任务：
 任务：
 
 - [ ] 在 `docs/` 中写一份 IPC 协议文档
+- [ ] 为协议增加 `version` 字段，避免前后端演进时静默不兼容
 - [ ] 前端和后端严格遵循此协议，不在协议之外传递人格逻辑
 
 ### 4.3 Tauri 桌面壳
@@ -220,7 +228,8 @@ CLI 阶段不引入 Tauri 和 FastAPI sidecar。此阶段 UI 层任务：
 
 | 依赖 | 来源 | 说明 |
 |------|------|------|
-| FastAPI sidecar | Python 核心 | Phase 4 前 Python 侧必须暴露 HTTP 接口 |
+| Python application service | Python 核心 | Phase 4 前必须先稳定应用编排层 |
+| FastAPI sidecar 或 IPC 适配 | Python 核心 | 传输方式可以替换，但协议和 service 要稳定 |
 | 情绪状态 | 人格层 | 通过 IPC `/state` 端点获取 |
 | 主动介入事件 | 感知层 → 人格层 | 通过 IPC `proactive` 消息推送到前端 |
 | Live2D 模型 | 角色包 | Phase 5，需确认使用条款 |

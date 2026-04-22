@@ -7,6 +7,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import yaml
 
@@ -348,6 +349,38 @@ class TestEstimateTokens(unittest.TestCase):
         est = estimate_tokens(text)
         # 100 chars / 1.5 = 66.6 → 66
         self.assertEqual(est, 66)
+
+
+class TestDefaultCharacterResolution(unittest.TestCase):
+
+    def test_resolve_initial_character_path_picks_valid_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "broken").mkdir()
+            valid = root / "rei"
+            valid.mkdir()
+            (valid / "personality.yaml").write_text("name: 丽\nforbidden_words: []\nemotion_triggers: {}\n", encoding="utf-8")
+
+            import src.api.app as app_module
+
+            with patch.object(app_module, "_CHARACTERS_DIR", root):
+                with patch.object(app_module, "_CHARACTER_PATH", None):
+                    path = app_module._resolve_initial_character_path()
+
+            self.assertEqual(path, valid / "personality.yaml")
+
+    def test_resolve_initial_character_path_prefers_explicit_override(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            override = root / "custom.yaml"
+            override.write_text("name: Override\nforbidden_words: []\nemotion_triggers: {}\n", encoding="utf-8")
+
+            import src.api.app as app_module
+
+            with patch.object(app_module, "_CHARACTER_PATH", override):
+                path = app_module._resolve_initial_character_path()
+
+            self.assertEqual(path, override)
 
 
 if __name__ == "__main__":

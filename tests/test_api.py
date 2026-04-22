@@ -75,6 +75,7 @@ class TestHealthEndpoint(unittest.TestCase):
                     data = resp.json()
                     self.assertEqual(data["status"], "ok")
                     self.assertIn("character", data)
+                    self.assertIn("character_id", data)
 
 
 @unittest.skipUnless(_HAS_FASTAPI, "fastapi/httpx 未安装，跳过 API 测试")
@@ -176,6 +177,7 @@ class TestStateEndpoint(unittest.TestCase):
                     resp = client.get("/state")
                     self.assertEqual(resp.status_code, 200)
                     data = resp.json()
+                    self.assertIn("character_id", data)
                     self.assertIn("character_name", data)
                     self.assertIn("mood", data)
                     self.assertIn("turn", data)

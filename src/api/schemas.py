@@ -32,6 +32,7 @@ class ChatResponse(BaseModel):
 
 
 class StateResponse(BaseModel):
+    character_id: str
     character_name: str
     mood: str
     persist_count: int
@@ -44,8 +45,15 @@ class StateResponse(BaseModel):
 
 class HealthResponse(BaseModel):
     status: str = "ok"
+    character_id: str
     character: str
     version: str = ""
+
+
+class SwitchCharacterResponse(BaseModel):
+    character_id: str
+    character_name: str
+    status: str = "ok"
 
 
 class StreamChunk(BaseModel):

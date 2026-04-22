@@ -45,6 +45,7 @@ class ConversationService:
         data_dir: Optional[Path] = None,
         enable_perception: bool = False,
     ) -> None:
+        self._character_id = character_path.parent.name
         self._config: CharacterConfig = load_character(character_path)
         self._debug = debug
         self._state = EmotionState()
@@ -92,6 +93,10 @@ class ConversationService:
     @property
     def character(self) -> CharacterConfig:
         return self._config
+
+    @property
+    def character_id(self) -> str:
+        return self._character_id
 
     @property
     def character_state(self) -> EmotionState:
@@ -172,7 +177,7 @@ class ConversationService:
         wm.add("user", user_input)
 
         # 4. 构建 prompt 上下文（记忆 + 感知）
-        character_id = config.name
+        character_id = self._character_id
         memory_ctx = self._memory.get_context(character_id, token_budget=self._MEMORY_TOKEN_BUDGET)
         self._last_memory_ctx = memory_ctx
 
@@ -281,7 +286,7 @@ class ConversationService:
                 self._perception_log.record(
                     trigger_name=event.trigger_name,
                     reason=event.tag,
-                    character_id=self._config.name,
+                    character_id=self._character_id,
                     proactive_reply=reply,
                 )
             return reply
@@ -297,7 +302,7 @@ class ConversationService:
                 pass
         history = self._memory.working_memory.get_messages()
         self._memory.on_session_end(
-            character_id=self._config.name,
+            character_id=self._character_id,
             history=history,
             llm_chat_fn=self._llm.chat,
         )

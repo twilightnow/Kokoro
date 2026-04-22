@@ -1,0 +1,12 @@
+{
+  "name": "kokoro",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently -n vite,tauri -c cyan,green --kill-others-on-fail \"npm run dev --prefix frontend\" \"cd src-tauri && npx @tauri-apps/cli dev\"",
+    "sidecar": "python -m src.api.server",
+    "dev:all": "concurrently -n sidecar,vite,tauri -c yellow,cyan,green --kill-others-on-fail \"python -m src.api.server\" \"npm run dev --prefix frontend\" \"cd src-tauri && npx @tauri-apps/cli dev\""
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.0"
+  }
+}

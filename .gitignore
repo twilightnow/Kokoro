@@ -27,6 +27,11 @@ logs/*.log
 .idea/
 *.swp
 *.swo
+*.code-workspace
+
+# 本地工具配置
+.claude/
+.codex/
 
 # OS
 .DS_Store
@@ -41,3 +46,15 @@ htmlcov/
 # mypy / ruff
 .mypy_cache/
 .ruff_cache/
+
+# Node / Frontend
+node_modules/
+frontend/node_modules/
+frontend/dist/
+
+# Tauri / Rust
+src-tauri/target/
+
+# 运行时数据
+data/logs/
+data/memories/

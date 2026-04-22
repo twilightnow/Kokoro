@@ -18,7 +18,20 @@ from dotenv import load_dotenv
 _ENV_PATH = Path(__file__).resolve().with_name(".env")
 load_dotenv(dotenv_path=_ENV_PATH)
 
-_CHARACTER_PATH = Path("characters/asuka/personality.yaml")
+_CHARACTERS_DIR = Path("characters")
+
+
+def _resolve_default_character_path() -> Path:
+    if not _CHARACTERS_DIR.exists():
+        raise FileNotFoundError(f"角色目录不存在: {_CHARACTERS_DIR}")
+    candidates = sorted(
+        path / "personality.yaml"
+        for path in _CHARACTERS_DIR.iterdir()
+        if path.is_dir() and (path / "personality.yaml").exists()
+    )
+    if not candidates:
+        raise FileNotFoundError(f"未找到可用角色配置: {_CHARACTERS_DIR}/<id>/personality.yaml")
+    return candidates[0]
 
 
 def _configure_stdio() -> None:
@@ -32,7 +45,7 @@ def run_conversation(debug: bool, enable_perception: bool = False) -> None:
     from src.application.conversation_service import ConversationService
 
     service = ConversationService(
-        character_path=_CHARACTER_PATH,
+        character_path=_resolve_default_character_path(),
         debug=debug,
         enable_perception=enable_perception,
     )

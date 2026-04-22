@@ -21,12 +21,14 @@ router = APIRouter(tags=["stream"])
 
 @router.websocket("/stream")
 async def stream(websocket: WebSocket) -> None:
-    # WebSocket 路由不使用 Depends()，直接调用 get_service()
-    service: ConversationService = get_service()
     await websocket.accept()
     try:
         while True:
             data = await websocket.receive_text()
+
+            # 每次收到消息都重新获取 service，确保角色切换后使用新实例
+            service: ConversationService = get_service()
+
             try:
                 payload = json.loads(data)
                 message = payload.get("message", "").strip()
@@ -42,12 +44,10 @@ async def stream(websocket: WebSocket) -> None:
             if not message:
                 continue
 
-            # 发送"思考中"指示
             await websocket.send_text(
                 StreamChunk(type="thinking", content="").model_dump_json()
             )
 
-            # handle_turn() 是同步阻塞调用，用 asyncio.to_thread 避免阻塞事件循环
             reply = await asyncio.to_thread(service.handle_turn, message)
 
             if reply is None:

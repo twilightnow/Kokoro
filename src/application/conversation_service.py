@@ -60,6 +60,10 @@ class ConversationService:
         self._turn = 0
         self._last_log_entry: Optional[dict] = None
         self._last_memory_ctx: MemoryContext = MemoryContext()
+        self._last_system_prompt: str = ""
+        self._session_token_input: int = 0
+        self._session_token_output: int = 0
+        self._working_memory_truncation_count: int = 0
 
         # 感知层（可选）
         self._proactive_engine: Optional["ProactiveEngine"] = None
@@ -115,6 +119,29 @@ class ConversationService:
     def memory_context(self) -> MemoryContext:
         """返回最近一次 get_context() 的缓存结果。"""
         return self._last_memory_ctx
+
+    @property
+    def last_system_prompt(self) -> str:
+        """返回最近一次发送给 LLM 的完整 system prompt。"""
+        return self._last_system_prompt
+
+    @property
+    def session_token_total(self) -> dict:
+        """本次会话累计 token 用量。"""
+        return {
+            "input": self._session_token_input,
+            "output": self._session_token_output,
+        }
+
+    @property
+    def working_memory_message_count(self) -> int:
+        """当前工作记忆消息条数。"""
+        return len(self._memory.working_memory)
+
+    @property
+    def working_memory_truncation_count(self) -> int:
+        """本次会话工作记忆截断累计次数。"""
+        return self._working_memory_truncation_count
 
     def run(self) -> None:
         """启动交互式对话循环（阻塞直到用户退出）。"""
@@ -173,7 +200,10 @@ class ConversationService:
 
         # 3. 工作记忆：截断后追加本轮用户输入
         wm = self._memory.working_memory
+        prev_len = len(wm)
         wm.truncate()
+        if len(wm) < prev_len:
+            self._working_memory_truncation_count += 1
         wm.add("user", user_input)
 
         # 4. 构建 prompt 上下文（记忆 + 感知）
@@ -192,6 +222,7 @@ class ConversationService:
             perception=perception_ctx,
         )
         system_prompt = build_system_prompt(prompt_ctx)
+        self._last_system_prompt = system_prompt
 
         if self._debug:
             mood_label = (
@@ -219,6 +250,10 @@ class ConversationService:
 
         reply = result.text
         wm.add("assistant", reply)
+
+        # 累计 session token
+        self._session_token_input += result.input_tokens
+        self._session_token_output += result.output_tokens
 
         # 6. 禁用词检查
         flagged = _check_forbidden(reply, config.forbidden_words)

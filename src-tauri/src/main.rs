@@ -3,7 +3,6 @@
 
 mod commands;
 mod tray;
-mod utils;
 
 fn main() {
     tauri::Builder::default()
@@ -15,8 +14,9 @@ fn main() {
             commands::set_passthrough,
             commands::get_window_position,
             commands::set_window_position,
-            commands::get_characters,
-            commands::switch_character,
+            commands::get_window_monitor_bounds,
+            commands::get_window_metrics,
+            commands::open_admin_window,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

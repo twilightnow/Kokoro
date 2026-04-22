@@ -1,13 +1,15 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import type { Mood } from '../types/chat'
+import type { CharacterDisplayConfig, Mood } from '../types/chat'
 
 export const useChatStore = defineStore('chat', () => {
   const mood = ref<Mood>('normal')
   const reply = ref<string>('')
   const isThinking = ref<boolean>(false)
   const proactiveActions = ref<string[]>([])
+  const characterId = ref<string>('')
   const characterName = ref<string>('')
+  const display = ref<CharacterDisplayConfig>({ mode: 'placeholder' })
   const turn = ref<number>(0)
 
   function setMood(m: Mood): void {
@@ -30,13 +32,20 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
-  function setProactiveMessage(msg: string, actions: string[] = ['嗯', '知道了', '不想说']): void {
+  function setProactiveMessage(msg: string, actions: string[] = ['好', '知道了', '不想说']): void {
     reply.value = msg
     proactiveActions.value = actions
   }
 
-  function setCharacterInfo(name: string, initialTurn: number): void {
+  function setCharacterInfo(
+    id: string,
+    name: string,
+    initialTurn: number,
+    nextDisplay: CharacterDisplayConfig,
+  ): void {
+    characterId.value = id
     characterName.value = name
+    display.value = nextDisplay
     turn.value = initialTurn
   }
 
@@ -44,8 +53,14 @@ export const useChatStore = defineStore('chat', () => {
     turn.value += 1
   }
 
-  function resetForNewCharacter(name: string): void {
+  function resetForNewCharacter(
+    id: string,
+    name: string,
+    nextDisplay: CharacterDisplayConfig,
+  ): void {
+    characterId.value = id
     characterName.value = name
+    display.value = nextDisplay
     turn.value = 0
     mood.value = 'normal'
     reply.value = ''
@@ -58,7 +73,9 @@ export const useChatStore = defineStore('chat', () => {
     reply,
     isThinking,
     proactiveActions,
+    characterId,
     characterName,
+    display,
     turn,
     setMood,
     setReply,

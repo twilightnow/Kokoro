@@ -2,9 +2,11 @@
   "name": "kokoro",
   "private": true,
   "scripts": {
-    "dev": "concurrently -n vite,tauri -c cyan,green --kill-others-on-fail \"npm run dev --prefix frontend\" \"cd src-tauri && npx @tauri-apps/cli dev\"",
-    "sidecar": "python -m src.api.server",
-    "dev:all": "concurrently -n sidecar,vite,tauri -c yellow,cyan,green --kill-others-on-fail \"python -m src.api.server\" \"npm run dev --prefix frontend\" \"cd src-tauri && npx @tauri-apps/cli dev\""
+    "frontend:dev": "chcp 65001>nul && npm run dev --prefix frontend",
+    "tauri:dev": "chcp 65001>nul && cd src-tauri && npx @tauri-apps/cli dev",
+    "dev": "chcp 65001>nul && concurrently -n vite,tauri -c cyan,green --kill-others-on-fail \"npm run frontend:dev\" \"npm run tauri:dev\"",
+    "sidecar": "chcp 65001>nul && set PYTHONUTF8=1&& python -X utf8 -m src.api.server",
+    "dev:all": "chcp 65001>nul && concurrently -n sidecar,vite,tauri -c yellow,cyan,green --kill-others-on-fail \"npm run sidecar\" \"npm run frontend:dev\" \"npm run tauri:dev\""
   },
   "devDependencies": {
     "concurrently": "^9.0.0"

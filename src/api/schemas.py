@@ -1,9 +1,4 @@
-"""
-API 数据契约：请求/响应的 Pydantic 模型。
-
-职责边界：只做序列化/反序列化，不含业务逻辑。
-"""
-from typing import Optional
+from typing import Dict, Optional
 
 from pydantic import BaseModel, Field
 
@@ -22,25 +17,42 @@ class UsageInfo(BaseModel):
 class ChatResponse(BaseModel):
     reply: str
     mood: str
-    """当前情绪（触发后）。"""
     mood_changed: bool
-    """本轮是否发生情绪变化。"""
     flagged: bool
-    """是否命中禁用词。"""
     turn: int
     usage: Optional[UsageInfo] = None
+
+
+class Live2DDisplayConfig(BaseModel):
+    model_url: str
+    scale: float = 1.0
+    offset_x: float = 0.0
+    offset_y: float = 0.0
+    idle_group: str = "Idle"
+    tap_body_group: str = "Tap@Body"
+    mood_motions: Dict[str, str] = Field(default_factory=dict)
+
+
+class CharacterDisplayConfig(BaseModel):
+    mode: str = "placeholder"
+    live2d: Optional[Live2DDisplayConfig] = None
+
+
+class SessionTokenTotal(BaseModel):
+    input: int = 0
+    output: int = 0
 
 
 class StateResponse(BaseModel):
     character_id: str
     character_name: str
+    display: CharacterDisplayConfig = Field(default_factory=CharacterDisplayConfig)
     mood: str
     persist_count: int
     turn: int
     memory_summary_count: int
-    """当前摘要条数。"""
     memory_fact_count: int
-    """当前长期事实条数。"""
+    session_token_total: Optional[SessionTokenTotal] = None
 
 
 class HealthResponse(BaseModel):
@@ -53,16 +65,12 @@ class HealthResponse(BaseModel):
 class SwitchCharacterResponse(BaseModel):
     character_id: str
     character_name: str
+    display: CharacterDisplayConfig = Field(default_factory=CharacterDisplayConfig)
     status: str = "ok"
 
 
 class StreamChunk(BaseModel):
-    """WebSocket 流式消息块。"""
     type: str
-    """消息类型："thinking" | "token" | "done" | "error"。"""
     content: str
-    """token 文本 / done 时为完整回复 / error 时为错误描述。"""
     mood: Optional[str] = None
-    """仅 done 时填充。"""
     flagged: Optional[bool] = None
-    """仅 done 时填充。"""

@@ -12,7 +12,7 @@ import json
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from ..app import get_service
+from ..service_registry import get_service
 from ..schemas import StreamChunk
 from ...application.conversation_service import ConversationService
 

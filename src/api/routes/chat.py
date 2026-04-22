@@ -7,7 +7,7 @@ import asyncio
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from ..app import get_service
+from ..service_registry import get_service
 from ..schemas import ChatRequest, ChatResponse, UsageInfo
 from ...application.conversation_service import ConversationService
 

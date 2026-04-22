@@ -1,0 +1,11 @@
+{
+  "Version": 1,
+  "Name": "Ellen Joe",
+  "ModelID": "16b66821d0e8438fb645f45f9e8a96e8",
+  "FileReferences": {
+    "Icon": "",
+    "Model": "../runtime/ellen_joe.model3.json",
+    "IdleAnimation": "../runtime/motion/ellen_joe_idle.motion3.json",
+    "IdleAnimationWhenTrackingLost": ""
+  }
+}

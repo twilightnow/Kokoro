@@ -1,88 +1,153 @@
-/**
- * useEdgeSnap — ウィンドウ端スナップ composable。
- *
- * 職責：
- *   - ウィンドウ移動を監視し、画面端から SNAP_THRESHOLD 内に来たらスナップ
- *   - スナップ後は SNAP_HIDE_PX 分だけウィンドウを画面に残して隠す
- *   - unsnap() でフル表示に戻す
- */
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useUiStore } from '../stores/ui'
 
-// ── 定数 ──────────────────────────────────────────────────────────────────────
-const SNAP_THRESHOLD = 30  // 物理px：この距離以内で端スナップ発動
-const SNAP_HIDE_PX = 40    // 物理px：スナップ後に残す幅
+const SNAP_THRESHOLD = 30
+const SNAP_HIDE_PX = 40
+const SNAP_HOVER_MS = 140
 
-// ウィンドウサイズ（tauri.conf.json と揃える）
-const WIN_W_CSS = 320
-const WIN_H_CSS = 520
+interface MonitorBounds {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+interface WindowMetrics {
+  width: number
+  height: number
+  monitor: MonitorBounds
+}
+
+type SnapEdge = 'left' | 'right' | 'bottom'
 
 export function useEdgeSnap() {
   const uiStore = useUiStore()
-  // プログラム移動によるフィードバックループを防ぐフラグ
   let isProgrammaticMove = false
+  let snapTimer: ReturnType<typeof setTimeout> | null = null
+  let pendingEdge: SnapEdge | null = null
+  let pendingMonitorKey: string | null = null
 
-  /** アプリ起動時に一度だけ呼ぶ */
+  function clearPendingSnap(): void {
+    if (snapTimer) {
+      clearTimeout(snapTimer)
+      snapTimer = null
+    }
+    pendingEdge = null
+    pendingMonitorKey = null
+  }
+
+  async function getWindowMetrics(): Promise<WindowMetrics> {
+    return invoke<WindowMetrics>('get_window_metrics')
+  }
+
+  function getMonitorKey(monitor: MonitorBounds): string {
+    return `${monitor.x},${monitor.y},${monitor.width},${monitor.height}`
+  }
+
   async function setup(): Promise<void> {
     const win = getCurrentWindow()
     await win.onMoved(async (event) => {
-      // プログラム移動によるイベントはスキップ
       if (isProgrammaticMove) {
         isProgrammaticMove = false
         return
       }
 
       const { x, y } = event.payload
-      const dpr = window.devicePixelRatio
-      const physW = Math.round(window.screen.width * dpr)
-      const physH = Math.round(window.screen.height * dpr)
-      const winW = Math.round(WIN_W_CSS * dpr)
-      const winH = Math.round(WIN_H_CSS * dpr)
+      const metrics = await getWindowMetrics()
+      const winW = metrics.width
+      const winH = metrics.height
+      const monitor = metrics.monitor
+      const monitorLeft = monitor.x
+      const monitorRight = monitor.x + monitor.width
+      const monitorBottom = monitor.y + monitor.height
+      const monitorKey = getMonitorKey(monitor)
 
-      if (x + winW > physW - SNAP_THRESHOLD) {
-        uiStore.setSnap('right')
-        isProgrammaticMove = true
-        await invoke('set_window_position', { x: physW - SNAP_HIDE_PX, y })
-      } else if (x < SNAP_THRESHOLD) {
-        uiStore.setSnap('left')
-        isProgrammaticMove = true
-        await invoke('set_window_position', { x: SNAP_HIDE_PX - winW, y })
-      } else if (y + winH > physH - SNAP_THRESHOLD) {
-        uiStore.setSnap('bottom')
-        isProgrammaticMove = true
-        await invoke('set_window_position', { x, y: physH - SNAP_HIDE_PX })
+      let edge: SnapEdge | null = null
+      if (x + winW > monitorRight - SNAP_THRESHOLD) {
+        edge = 'right'
+      } else if (x < monitorLeft + SNAP_THRESHOLD) {
+        edge = 'left'
+      } else if (y + winH > monitorBottom - SNAP_THRESHOLD) {
+        edge = 'bottom'
       } else {
+        clearPendingSnap()
         if (uiStore.isSnapped) uiStore.clearSnap()
+        return
       }
+
+      if (pendingEdge === edge && pendingMonitorKey === monitorKey) {
+        return
+      }
+
+      clearPendingSnap()
+      pendingEdge = edge
+      pendingMonitorKey = monitorKey
+      snapTimer = setTimeout(async () => {
+        try {
+          const latestMetrics = await getWindowMetrics()
+          const latestMonitor = latestMetrics.monitor
+          if (getMonitorKey(latestMonitor) !== monitorKey || pendingEdge !== edge) return
+
+          const [latestX, latestY] = await invoke<[number, number]>('get_window_position')
+          const latestW = latestMetrics.width
+          const latestH = latestMetrics.height
+          const latestRight = latestMonitor.x + latestMonitor.width
+          const latestBottom = latestMonitor.y + latestMonitor.height
+
+          let targetX = latestX
+          let targetY = latestY
+
+          if (edge === 'right' && latestX + latestW > latestRight - SNAP_THRESHOLD) {
+            targetX = latestRight - SNAP_HIDE_PX
+          } else if (edge === 'left' && latestX < latestMonitor.x + SNAP_THRESHOLD) {
+            targetX = latestMonitor.x + SNAP_HIDE_PX - latestW
+          } else if (edge === 'bottom' && latestY + latestH > latestBottom - SNAP_THRESHOLD) {
+            targetY = latestBottom - SNAP_HIDE_PX
+          } else {
+            return
+          }
+
+          uiStore.setSnap(edge)
+          isProgrammaticMove = true
+          await invoke('set_window_position', { x: targetX, y: targetY })
+        } finally {
+          clearPendingSnap()
+        }
+      }, SNAP_HOVER_MS)
     })
   }
 
-  /** マウスがウィンドウに入ったときに呼ぶ — スナップ解除してフル表示に戻す */
   async function unsnap(): Promise<void> {
     if (!uiStore.isSnapped) return
-    const dpr = window.devicePixelRatio
-    const physW = Math.round(window.screen.width * dpr)
-    const physH = Math.round(window.screen.height * dpr)
-    const winW = Math.round(WIN_W_CSS * dpr)
-    const winH = Math.round(WIN_H_CSS * dpr)
+
+    clearPendingSnap()
+    const metrics = await getWindowMetrics()
+    const winW = metrics.width
+    const winH = metrics.height
+    const monitor = metrics.monitor
+    const monitorLeft = monitor.x
+    const monitorTop = monitor.y
+    const monitorRight = monitor.x + monitor.width
+    const monitorBottom = monitor.y + monitor.height
 
     let x = 0
     let y = 0
     switch (uiStore.snapEdge) {
       case 'right':
-        x = physW - winW - 20
-        y = Math.round((physH - winH) / 2)
+        x = monitorRight - winW - 20
+        y = Math.round(monitorTop + (monitor.height - winH) / 2)
         break
       case 'left':
-        x = 20
-        y = Math.round((physH - winH) / 2)
+        x = monitorLeft + 20
+        y = Math.round(monitorTop + (monitor.height - winH) / 2)
         break
       case 'bottom':
-        x = Math.round((physW - winW) / 2)
-        y = physH - winH - 20
+        x = Math.round(monitorLeft + (monitor.width - winW) / 2)
+        y = monitorBottom - winH - 20
         break
       default:
+        uiStore.clearSnap()
         return
     }
 

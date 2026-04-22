@@ -1,0 +1,15 @@
+display:
+  mode: "live2d"
+  live2d:
+    root: "live2d/runtime"
+    model: "ellen_joe.model3.json"
+    scale: 1.0
+    offset_x: 0
+    offset_y: 52
+    idle_group: "Idle"
+    tap_body_group: "Tap@Body"
+    mood_motions:
+      happy: "Idle"
+      angry: "Idle"
+      shy: "Idle"
+      cold: "Idle"

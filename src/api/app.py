@@ -15,64 +15,28 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from ..application.conversation_service import ConversationService
+from ..character_defaults import resolve_default_character_path
+from .service_registry import get_service, set_service, switch_character  # noqa: F401 — re-exported
 
 # 全局服务实例（单例，lifespan 管理）
-_service: Optional[ConversationService] = None
-_CHARACTERS_DIR = Path("characters")
 _CHARACTER_PATH: Optional[Path] = None
 
 
 def _resolve_initial_character_path() -> Path:
     if _CHARACTER_PATH is not None:
         return _CHARACTER_PATH
-
-    if not _CHARACTERS_DIR.exists():
-        raise FileNotFoundError(f"角色目录不存在: {_CHARACTERS_DIR}")
-
-    candidates = sorted(
-        path / "personality.yaml"
-        for path in _CHARACTERS_DIR.iterdir()
-        if path.is_dir() and (path / "personality.yaml").exists()
-    )
-    if not candidates:
-        raise FileNotFoundError(f"未找到可用角色配置: {_CHARACTERS_DIR}/<id>/personality.yaml")
-    return candidates[0]
-
-
-def get_service() -> ConversationService:
-    """依赖注入函数，路由通过此函数获取 ConversationService 实例。"""
-    if _service is None:
-        raise RuntimeError("ConversationService 未初始化")
-    return _service
-
-
-async def switch_character(name: str) -> tuple[str, str]:
-    """当前会话存档 → 切换到新角色 → 返回 (角色 ID, 显示名称)。"""
-    global _service
-    if _service is None:
-        raise RuntimeError("ConversationService 未初始化")
-
-    char_path = Path(f"characters/{name}/personality.yaml")
-    if not char_path.exists():
-        raise ValueError(f"角色不存在: {name}")
-
-    # 保存当前会话摘要（同步操作，放到线程池避免阻塞事件循环）
-    await asyncio.to_thread(_service._on_session_end)
-
-    # 重新初始化
-    _service = ConversationService(character_path=char_path, enable_perception=False)
-    return _service.character_id, _service.character.name
+    return resolve_default_character_path()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator:
-    global _service
-    _service = ConversationService(
+    svc = ConversationService(
         character_path=_resolve_initial_character_path(),
         enable_perception=False,
     )
+    set_service(svc)
     yield
-    _service = None  # 清理
+    set_service(None)  # 清理
 
 
 def create_app() -> FastAPI:
@@ -97,9 +61,11 @@ def create_app() -> FastAPI:
     )
 
     from .routes import chat, state, stream
+    from .routes.admin import router as admin_router
     app.include_router(chat.router)
     app.include_router(state.router)
     app.include_router(stream.router)
+    app.include_router(admin_router)
 
     return app
 

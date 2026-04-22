@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue'
+import { ref, onMounted, onBeforeUnmount, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { listen } from '@tauri-apps/api/event'
@@ -11,56 +11,86 @@ import { useUiStore } from './stores/ui'
 import { useChat } from './composables/useChat'
 import { useEdgeSnap } from './composables/useEdgeSnap'
 import { useWindowPosition } from './composables/useWindowPosition'
+import { sidecarHttpUrl } from './shared/sidecar'
+import type { CharacterDisplayConfig } from './types/chat'
 
 const chatStore = useChatStore()
 const uiStore = useUiStore()
-const { status, errorMessage, init, sendMessage } = useChat()
+const { status, errorMessage, init, sendMessage, syncState } = useChat()
 const { setup: setupEdgeSnap, unsnap } = useEdgeSnap()
 const { restorePosition, startTracking } = useWindowPosition()
 
-// InputBar の公開メソッド型
+const PASSTHROUGH_KEY = 'kokoro-passthrough-lock'
+const passthroughLocked = ref(false)
+
 interface InputBarExpose {
   show(): void
   hide(): void
 }
-const inputBarRef = ref<InputBarExpose | null>(null)
 
-// 開発モードのみ store を window に公開（型を二段階キャスト）
+const inputBarRef = ref<InputBarExpose | null>(null)
+let stopWindowFocusListener: (() => void) | null = null
+let stateSyncTimer: number | null = null
+
 if (import.meta.env.DEV) {
-  ;(window as unknown as Record<string, unknown>)['__store'] = chatStore
+  ;(window as unknown as Record<string, unknown>).__store = chatStore
 }
 
 onMounted(async () => {
-  // M4-E: 前回位置を復元、移動追跡を開始
+  // Restore passthrough lock state from localStorage (shared with admin window)
+  passthroughLocked.value = localStorage.getItem(PASSTHROUGH_KEY) === '1'
+  window.addEventListener('storage', onStorageChange)
+
+  // Respect the persisted setting on startup instead of forcing passthrough on.
+  await invoke('set_passthrough', { enabled: passthroughLocked.value })
   await restorePosition()
   await startTracking()
-
-  // M3: sidecar WebSocket 接続
   await init()
-
-  // M4-B: 端スナップ設定
   await setupEdgeSnap()
 
-  // 角色切换事件
+  const syncCurrentState = async () => {
+    await syncState()
+  }
+
+  stopWindowFocusListener = await getCurrentWindow().onFocusChanged(async ({ payload }) => {
+    if (payload) {
+      await syncCurrentState()
+    }
+  })
+
+  document.addEventListener('visibilitychange', syncOnVisible)
+  stateSyncTimer = window.setInterval(() => {
+    void syncCurrentState()
+  }, 3000)
+
   await listen<string>('character-switch-requested', async (event) => {
     const name = event.payload
     try {
       const resp = await fetch(
-        `http://127.0.0.1:18765/switch-character?name=${encodeURIComponent(name)}`,
+        sidecarHttpUrl(`/switch-character?name=${encodeURIComponent(name)}`),
         { method: 'POST' },
       )
       if (!resp.ok) throw new Error(await resp.text())
-      const data = await resp.json() as { character_name: string }
-      chatStore.resetForNewCharacter(data.character_name)
+      const data = await resp.json() as {
+        character_id: string
+        character_name: string
+        display?: CharacterDisplayConfig
+      }
+      chatStore.resetForNewCharacter(
+        data.character_id,
+        data.character_name,
+        data.display ?? { mode: 'placeholder' },
+      )
       chatStore.setReply(`[ 已切换到 ${data.character_name} ]`)
-      await invoke('set_passthrough', { enabled: false })
+      if (!passthroughLocked.value) {
+        await invoke('set_passthrough', { enabled: false })
+      }
       inputBarRef.value?.show()
     } catch (e) {
-      console.error('[tray] 切换角色失败', e)
+      console.error('[tray] character switch failed', e)
     }
   })
 
-  // ウィンドウ閉じる前に位置保存
   const win = getCurrentWindow()
   await win.onCloseRequested(async (event) => {
     event.preventDefault()
@@ -70,7 +100,30 @@ onMounted(async () => {
   })
 })
 
-// 返回后自动重新显示输入框
+function syncOnVisible(): void {
+  if (document.visibilityState === 'visible') {
+    void syncState()
+  }
+}
+
+function onStorageChange(event: StorageEvent): void {
+  if (event.key !== PASSTHROUGH_KEY) return
+  const locked = event.newValue === '1'
+  passthroughLocked.value = locked
+  void invoke('set_passthrough', { enabled: locked })
+}
+
+onBeforeUnmount(() => {
+  stopWindowFocusListener?.()
+  stopWindowFocusListener = null
+  document.removeEventListener('visibilitychange', syncOnVisible)
+  window.removeEventListener('storage', onStorageChange)
+  if (stateSyncTimer !== null) {
+    window.clearInterval(stateSyncTimer)
+    stateSyncTimer = null
+  }
+})
+
 watch(
   () => chatStore.isThinking,
   (thinking) => {
@@ -80,38 +133,44 @@ watch(
   },
 )
 
-// 立绘クリック → 入力欄を表示
 function onSpriteClick(): void {
   inputBarRef.value?.show()
 }
 
-// 送信 → WebSocket で sidecar へ
 function onSubmit(text: string): void {
   sendMessage(text)
 }
 
-// 主动介入の快捷ボタン
 function onProactiveAction(text: string): void {
   sendMessage(text)
 }
 
-// M4-A: マウスがウィンドウ内に入ったらパススルー解除
 async function onMouseEnter(): Promise<void> {
-  await invoke('set_passthrough', { enabled: false })
+  // When locked to passthrough-mode, don't disable it on hover
+  if (!passthroughLocked.value) {
+    await invoke('set_passthrough', { enabled: false })
+  }
   if (uiStore.isSnapped) await unsnap()
 }
 
-// M4-A: マウスがウィンドウ外に出たらパススルー有効
 async function onMouseLeave(): Promise<void> {
-  if (!uiStore.isSnapped) {
+  // Re-enable passthrough when mouse leaves so the window doesn't block desktop clicks
+  if (!passthroughLocked.value) {
     await invoke('set_passthrough', { enabled: true })
+  }
+}
+
+async function openAdmin(): Promise<void> {
+  try {
+    await invoke('open_admin_window')
+  } catch (error) {
+    console.error('[ui] failed to open admin window', error)
   }
 }
 </script>
 
 <template>
   <div class="app" @mouseenter="onMouseEnter" @mouseleave="onMouseLeave">
-    <!-- M3: 接続エラーバナー -->
     <Transition name="banner">
       <div
         v-if="status === 'error' || status === 'connection_failed'"
@@ -121,10 +180,16 @@ async function onMouseLeave(): Promise<void> {
       </div>
     </Transition>
 
+    <button class="admin-button" type="button" title="管理界面" @click="openAdmin">
+      ⚙
+    </button>
+
     <div class="sprite-area">
       <SpritePanel
         :mood="chatStore.mood"
+        :character-id="chatStore.characterId"
         :character-name="chatStore.characterName"
+        :display="chatStore.display"
         :turn="chatStore.turn"
         @click="onSpriteClick"
       />
@@ -194,6 +259,31 @@ body {
   z-index: 100;
   font-family: sans-serif;
   line-height: 1.4;
+}
+
+.admin-button {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 28px;
+  height: 28px;
+  border: 1px solid rgba(120, 130, 150, 0.35);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.86);
+  color: #4b5563;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  z-index: 120;
+  -webkit-app-region: no-drag;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.12);
+}
+
+.admin-button:hover {
+  background: rgba(255, 255, 255, 0.96);
 }
 
 .banner-enter-active,

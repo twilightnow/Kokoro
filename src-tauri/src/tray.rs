@@ -1,12 +1,53 @@
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
-    AppHandle, Emitter, Manager, Runtime,
+    utils::config::Color,
+    AppHandle, Manager, Runtime, WebviewUrl, WebviewWindowBuilder,
 };
-use crate::utils::read_character_names;
+
+pub fn show_or_create_admin_window<R: Runtime>(app: &AppHandle<R>) {
+    if let Some(window) = app.get_webview_window("admin") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+        let _ = window.center();
+        return;
+    }
+
+    let url = if cfg!(debug_assertions) {
+        match "http://localhost:5173/admin.html".parse() {
+            Ok(url) => WebviewUrl::External(url),
+            Err(_) => return,
+        }
+    } else {
+        WebviewUrl::App("admin.html".into())
+    };
+
+    if let Ok(window) = WebviewWindowBuilder::new(app, "admin", url)
+        .title("Kokoro Admin")
+        .inner_size(1100.0, 760.0)
+        .min_inner_size(900.0, 620.0)
+        .resizable(true)
+        .maximizable(true)
+        .minimizable(true)
+        .closable(true)
+        .decorations(true)
+        .transparent(false)
+        .background_color(Color(245, 245, 245, 255))
+        .focused(true)
+        .visible(true)
+        .always_on_top(false)
+        .skip_taskbar(false)
+        .build()
+    {
+        let _ = window.center();
+        let _ = window.set_focus();
+    }
+}
 
 fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, id: &str) {
     match id {
+        "admin" => show_or_create_admin_window(app),
         "quit" => app.exit(0),
         "toggle" => {
             if let Some(window) = app.get_webview_window("main") {
@@ -18,39 +59,16 @@ fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, id: &str) {
                 }
             }
         }
-        id if id.starts_with("char_") => {
-            let char_name = &id["char_".len()..];
-            let _ = app.emit("character-switch-requested", char_name.to_string());
-        }
         _ => {}
     }
 }
 
 pub fn setup_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
+    let admin_i = MenuItem::with_id(app, "admin", "管理界面", true, None::<&str>)?;
     let toggle_i = MenuItem::with_id(app, "toggle", "显示 / 隐藏", true, None::<&str>)?;
     let quit_i = MenuItem::with_id(app, "quit", "退出 Kokoro", true, None::<&str>)?;
 
-    let char_names = read_character_names();
-    let char_items: Vec<MenuItem<R>> = char_names
-        .iter()
-        .map(|name| {
-            MenuItem::with_id(
-                app,
-                format!("char_{name}"),
-                name.as_str(),
-                true,
-                None::<&str>,
-            )
-        })
-        .collect::<tauri::Result<Vec<_>>>()?;
-
-    // 固定アイテム + キャラクターアイテムを結合
-    let mut menu_refs: Vec<&dyn tauri::menu::IsMenuItem<R>> = vec![&toggle_i, &quit_i];
-    for item in &char_items {
-        menu_refs.push(item);
-    }
-
-    let menu = Menu::with_items(app, menu_refs.as_slice())?;
+    let menu = Menu::with_items(app, &[&admin_i, &toggle_i, &quit_i])?;
 
     TrayIconBuilder::new()
         .icon(app.default_window_icon().unwrap().clone())

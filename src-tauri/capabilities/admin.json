@@ -3,5 +3,8 @@
   "identifier": "admin",
   "description": "Permissions for the Kokoro admin window",
   "windows": ["admin"],
-  "permissions": ["core:default"]
+  "permissions": [
+    "core:default",
+    "core:window:allow-close"
+  ]
 }

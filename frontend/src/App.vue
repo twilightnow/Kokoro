@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount, watch } from 'vue'
+import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { listen } from '@tauri-apps/api/event'
@@ -7,28 +7,21 @@ import SpritePanel from './components/SpritePanel.vue'
 import BubbleBox from './components/BubbleBox.vue'
 import InputBar from './components/InputBar.vue'
 import { useChatStore } from './stores/chat'
-import { useUiStore } from './stores/ui'
 import { useChat } from './composables/useChat'
 import { useEdgeSnap } from './composables/useEdgeSnap'
 import { useWindowPosition } from './composables/useWindowPosition'
 import { sidecarHttpUrl } from './shared/sidecar'
+import { errorDetails, reportClientLog } from './shared/diagnostics'
 import type { CharacterDisplayConfig } from './types/chat'
 
 const chatStore = useChatStore()
-const uiStore = useUiStore()
 const { status, errorMessage, init, sendMessage, syncState } = useChat()
-const { setup: setupEdgeSnap, unsnap } = useEdgeSnap()
+const { setup: setupEdgeSnap } = useEdgeSnap()
 const { restorePosition, startTracking } = useWindowPosition()
 
 const PASSTHROUGH_KEY = 'kokoro-passthrough-lock'
+const MAIN_ALWAYS_ON_TOP_KEY = 'kokoro-main-always-on-top'
 const passthroughLocked = ref(false)
-
-interface InputBarExpose {
-  show(): void
-  hide(): void
-}
-
-const inputBarRef = ref<InputBarExpose | null>(null)
 let stopWindowFocusListener: (() => void) | null = null
 let stateSyncTimer: number | null = null
 
@@ -41,8 +34,11 @@ onMounted(async () => {
   passthroughLocked.value = localStorage.getItem(PASSTHROUGH_KEY) === '1'
   window.addEventListener('storage', onStorageChange)
 
-  // Respect the persisted setting on startup instead of forcing passthrough on.
+  // Respect persisted window behavior instead of changing it on hover.
   await invoke('set_passthrough', { enabled: passthroughLocked.value })
+  await invoke('set_main_always_on_top', {
+    enabled: localStorage.getItem(MAIN_ALWAYS_ON_TOP_KEY) === '1',
+  })
   await restorePosition()
   await startTracking()
   await init()
@@ -82,10 +78,6 @@ onMounted(async () => {
         data.display ?? { mode: 'placeholder' },
       )
       chatStore.setReply(`[ 已切换到 ${data.character_name} ]`)
-      if (!passthroughLocked.value) {
-        await invoke('set_passthrough', { enabled: false })
-      }
-      inputBarRef.value?.show()
     } catch (e) {
       console.error('[tray] character switch failed', e)
     }
@@ -107,10 +99,17 @@ function syncOnVisible(): void {
 }
 
 function onStorageChange(event: StorageEvent): void {
-  if (event.key !== PASSTHROUGH_KEY) return
-  const locked = event.newValue === '1'
-  passthroughLocked.value = locked
-  void invoke('set_passthrough', { enabled: locked })
+  if (event.key === PASSTHROUGH_KEY) {
+    const locked = event.newValue === '1'
+    passthroughLocked.value = locked
+    void invoke('set_passthrough', { enabled: locked })
+  }
+
+  if (event.key === MAIN_ALWAYS_ON_TOP_KEY) {
+    void invoke('set_main_always_on_top', {
+      enabled: event.newValue === '1',
+    })
+  }
 }
 
 onBeforeUnmount(() => {
@@ -124,19 +123,6 @@ onBeforeUnmount(() => {
   }
 })
 
-watch(
-  () => chatStore.isThinking,
-  (thinking) => {
-    if (!thinking && chatStore.reply) {
-      inputBarRef.value?.show()
-    }
-  },
-)
-
-function onSpriteClick(): void {
-  inputBarRef.value?.show()
-}
-
 function onSubmit(text: string): void {
   sendMessage(text)
 }
@@ -145,32 +131,34 @@ function onProactiveAction(text: string): void {
   sendMessage(text)
 }
 
-async function onMouseEnter(): Promise<void> {
-  // When locked to passthrough-mode, don't disable it on hover
-  if (!passthroughLocked.value) {
-    await invoke('set_passthrough', { enabled: false })
-  }
-  if (uiStore.isSnapped) await unsnap()
-}
-
-async function onMouseLeave(): Promise<void> {
-  // Re-enable passthrough when mouse leaves so the window doesn't block desktop clicks
-  if (!passthroughLocked.value) {
-    await invoke('set_passthrough', { enabled: true })
-  }
-}
-
 async function openAdmin(): Promise<void> {
+  void reportClientLog({
+    source: 'main-window',
+    event: 'admin-open-click',
+    message: '管理界面齿轮入口被点击',
+  })
   try {
     await invoke('open_admin_window')
+    void reportClientLog({
+      source: 'main-window',
+      event: 'admin-open-invoke-ok',
+      message: 'open_admin_window invoke completed',
+    })
   } catch (error) {
     console.error('[ui] failed to open admin window', error)
+    void reportClientLog({
+      source: 'main-window',
+      event: 'admin-open-invoke-error',
+      level: 'error',
+      message: 'open_admin_window invoke failed',
+      details: errorDetails(error),
+    })
   }
 }
 </script>
 
 <template>
-  <div class="app" @mouseenter="onMouseEnter" @mouseleave="onMouseLeave">
+  <div class="app">
     <Transition name="banner">
       <div
         v-if="status === 'error' || status === 'connection_failed'"
@@ -184,25 +172,29 @@ async function openAdmin(): Promise<void> {
       ⚙
     </button>
 
-    <div class="sprite-area">
-      <SpritePanel
-        :mood="chatStore.mood"
-        :character-id="chatStore.characterId"
-        :character-name="chatStore.characterName"
-        :display="chatStore.display"
-        :turn="chatStore.turn"
-        @click="onSpriteClick"
-      />
+    <div class="stage-shell">
+      <div class="bubble-layer">
+        <BubbleBox
+          :text="chatStore.reply"
+          :is-thinking="chatStore.isThinking"
+          :actions="chatStore.proactiveActions.length ? chatStore.proactiveActions : undefined"
+          @action="onProactiveAction"
+        />
+      </div>
+
+      <div class="sprite-area">
+        <SpritePanel
+          :mood="chatStore.mood"
+          :character-id="chatStore.characterId"
+          :character-name="chatStore.characterName"
+          :display="chatStore.display"
+          :turn="chatStore.turn"
+        />
+      </div>
     </div>
 
-    <div class="bubble-area">
-      <BubbleBox
-        :text="chatStore.reply"
-        :is-thinking="chatStore.isThinking"
-        :actions="chatStore.proactiveActions.length ? chatStore.proactiveActions : undefined"
-        @action="onProactiveAction"
-      />
-      <InputBar ref="inputBarRef" @submit="onSubmit" />
+    <div class="input-area">
+      <InputBar @submit="onSubmit" />
     </div>
   </div>
 </template>
@@ -224,23 +216,44 @@ body {
 
 <style scoped>
 .app {
-  width: 320px;
-  height: 520px;
+  width: 360px;
+  height: 620px;
   display: flex;
   flex-direction: column;
   align-items: center;
   position: relative;
 }
 
+.stage-shell {
+  position: relative;
+  width: 100%;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  padding: 48px 10px 8px;
+}
+
 .sprite-area {
   flex: 1;
   display: flex;
-  align-items: center;
+  align-items: stretch;
   justify-content: center;
+  width: 100%;
+  min-height: 0;
 }
 
-.bubble-area {
-  padding: 12px 16px 16px;
+.bubble-layer {
+  position: absolute;
+  top: 54px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(248px, calc(100% - 104px));
+  z-index: 15;
+  -webkit-app-region: no-drag;
+}
+
+.input-area {
+  padding: 0 14px 14px;
   width: 100%;
   -webkit-app-region: no-drag;
 }
@@ -267,7 +280,7 @@ body {
   right: 10px;
   width: 28px;
   height: 28px;
-  border: 1px solid rgba(120, 130, 150, 0.35);
+  border: none;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.86);
   color: #4b5563;

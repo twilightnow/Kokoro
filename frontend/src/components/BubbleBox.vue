@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed } from 'vue'
 
 const props = defineProps<{
   text: string
@@ -9,23 +9,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{ (e: 'action', text: string): void }>()
 
-const visible = ref(false)
-
-// 思考開始 or テキスト更新でバブルを表示。
-// 非表示にするのは親コンポーネントの責務（次のメッセージ送信時に自然に置き換わる）。
-watch(
-  () => props.isThinking,
-  (thinking) => {
-    if (thinking) visible.value = true
-  },
-)
-
-watch(
-  () => props.text,
-  (text) => {
-    if (text) visible.value = true
-  },
-)
+const visible = computed(() => props.isThinking || Boolean(props.text))
 </script>
 
 <template>
@@ -51,16 +35,34 @@ watch(
 
 <style scoped>
 .bubble-box {
-  background: rgba(255, 255, 255, 0.92);
-  border: 2px solid #ffb3c6;
-  border-radius: 12px;
-  padding: 10px 14px;
+  position: relative;
+  width: fit-content;
+  max-width: 100%;
+  margin-inline: auto;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1.5px solid #f2a4b8;
+  border-radius: 18px;
+  padding: 12px 16px;
   font-size: 13px;
   color: #333;
-  min-height: 42px;
+  min-height: 44px;
   font-family: 'Hiragino Kaku Gothic Pro', 'Meiryo', sans-serif;
   line-height: 1.5;
-  box-shadow: 0 2px 8px rgba(255, 100, 150, 0.15);
+  box-shadow: 0 14px 28px rgba(15, 23, 42, 0.16);
+}
+
+.bubble-box::after {
+  content: '';
+  position: absolute;
+  left: 34px;
+  bottom: -8px;
+  width: 14px;
+  height: 14px;
+  background: rgba(255, 255, 255, 0.94);
+  border-right: 1.5px solid #f2a4b8;
+  border-bottom: 1.5px solid #f2a4b8;
+  transform: rotate(45deg);
+  pointer-events: none;
 }
 
 .bubble-enter-active,
@@ -133,5 +135,9 @@ watch(
 
 .action-btn:hover {
   background: #ffe0eb;
+}
+
+.bubble-box > span {
+  white-space: pre-wrap;
 }
 </style>

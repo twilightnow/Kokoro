@@ -1,0 +1,24 @@
+display:
+  mode: "model3d"
+  model3d:
+    root: "assets/model3d"
+    default_skin: "base"
+    skin_order:
+      - "base"
+      - "combat"
+    auto_switch:
+      enabled: true
+      prefer_manual: true
+      mood_skins:
+        normal: "base"
+        happy: "base"
+        shy: "base"
+        angry: "combat"
+        cold: "combat"
+    skins:
+      base:
+        label: "常态流萤"
+        scene: "base/scene.json"
+      combat:
+        label: "武装流萤"
+        scene: "combat/scene.json"

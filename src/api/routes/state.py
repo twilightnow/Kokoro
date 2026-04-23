@@ -2,8 +2,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
 
 from ...application.conversation_service import ConversationService
+from ..character_assets import build_character_display, resolve_character_asset
 from ..service_registry import get_service, switch_character
-from ..character_assets import build_character_display, resolve_live2d_asset
 from ..schemas import HealthResponse, SessionTokenTotal, StateResponse, SwitchCharacterResponse
 
 router = APIRouter(tags=["state"])
@@ -48,7 +48,7 @@ async def health(
 @router.get("/character-assets/{character_id}/{asset_path:path}", name="get_character_asset")
 async def get_character_asset(character_id: str, asset_path: str) -> FileResponse:
     try:
-        file_path = resolve_live2d_asset(character_id, asset_path)
+        file_path = resolve_character_asset(character_id, asset_path)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="asset not found")
     except ValueError as e:

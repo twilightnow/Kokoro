@@ -14,18 +14,33 @@
       {
         "label": "main",
         "title": "Kokoro",
-        "width": 320,
-        "height": 520,
+        "width": 360,
+        "height": 620,
         "resizable": false,
         "decorations": false,
         "transparent": true,
-        "alwaysOnTop": true,
+        "alwaysOnTop": false,
         "skipTaskbar": true
+      },
+      {
+        "label": "admin",
+        "title": "Kokoro Admin",
+        "url": "admin.html",
+        "width": 1100,
+        "height": 760,
+        "minWidth": 900,
+        "minHeight": 620,
+        "resizable": true,
+        "decorations": true,
+        "transparent": false,
+        "visible": false,
+        "alwaysOnTop": false,
+        "skipTaskbar": false
       }
     ],
     "security": {
       "csp": null,
-      "capabilities": ["default"]
+      "capabilities": ["default", "admin"]
     }
   },
   "bundle": {

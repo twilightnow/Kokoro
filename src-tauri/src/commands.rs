@@ -1,6 +1,7 @@
 use serde::Serialize;
 use tauri::{AppHandle, Manager, PhysicalPosition, Runtime};
 
+use crate::diagnostics::report_client_log;
 use crate::tray::show_or_create_admin_window;
 
 #[derive(Serialize)]
@@ -25,6 +26,14 @@ pub fn set_passthrough<R: Runtime>(app: AppHandle<R>, enabled: bool) -> Result<(
         .ok_or_else(|| "Window not found".to_string())?;
     win.set_ignore_cursor_events(enabled)
         .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn set_main_always_on_top<R: Runtime>(app: AppHandle<R>, enabled: bool) -> Result<(), String> {
+    let win = app
+        .get_webview_window("main")
+        .ok_or_else(|| "Window not found".to_string())?;
+    win.set_always_on_top(enabled).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -93,6 +102,48 @@ pub fn get_window_metrics<R: Runtime>(app: AppHandle<R>) -> Result<WindowMetrics
 
 #[tauri::command]
 pub fn open_admin_window<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
-    show_or_create_admin_window(&app);
+    report_client_log(
+        "tauri-command",
+        "open-admin-window-called",
+        "info",
+        "open_admin_window command invoked",
+    );
+    match show_or_create_admin_window(&app) {
+        Ok(()) => {
+            report_client_log(
+                "tauri-command",
+                "open-admin-window-ok",
+                "info",
+                "admin window show_or_create completed",
+            );
+            Ok(())
+        }
+        Err(e) => {
+            report_client_log(
+                "tauri-command",
+                "open-admin-window-error",
+                "error",
+                &format!("admin window show_or_create failed: {e}"),
+            );
+            Err(e)
+        }
+    }
+}
+
+/// admin ウィンドウを閉じる。JS 側の window.close() 権限がない環境向けのフォールバック。
+#[tauri::command]
+pub fn close_admin_window<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("admin") {
+        window.hide().map_err(|e| e.to_string())?;
+    }
     Ok(())
+}
+
+/// admin ウィンドウの最前面表示を設定する。
+#[tauri::command]
+pub fn set_admin_always_on_top<R: Runtime>(app: AppHandle<R>, enabled: bool) -> Result<(), String> {
+    let win = app
+        .get_webview_window("admin")
+        .ok_or_else(|| "admin window not found".to_string())?;
+    win.set_always_on_top(enabled).map_err(|e| e.to_string())
 }

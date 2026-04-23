@@ -1,0 +1,32 @@
+{
+  "model": "流萤3.0.pmx",
+  "scale": 0.09,
+  "position": {
+    "x": 0,
+    "y": 0,
+    "z": 0
+  },
+  "rotation_deg": {
+    "x": 0,
+    "y": 180,
+    "z": 0
+  },
+  "camera": {
+    "distance": 35,
+    "fov": 30,
+    "target": {
+      "x": 0,
+      "y": 12,
+      "z": 0
+    }
+  },
+  "lights": {
+    "ambient_intensity": 0.88,
+    "directional_intensity": 1.22,
+    "directional_position": {
+      "x": 6,
+      "y": 14,
+      "z": 10
+    }
+  }
+}

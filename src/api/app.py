@@ -15,16 +15,27 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from ..application.conversation_service import ConversationService
-from ..character_defaults import resolve_default_character_path
+from ..character_defaults import CHARACTERS_DIR, resolve_default_character_path
 from .service_registry import get_service, set_service, switch_character  # noqa: F401 — re-exported
 
 # 全局服务实例（单例，lifespan 管理）
 _CHARACTER_PATH: Optional[Path] = None
+_CHARACTERS_DIR: Path = CHARACTERS_DIR
 
 
 def _resolve_initial_character_path() -> Path:
     if _CHARACTER_PATH is not None:
         return _CHARACTER_PATH
+    if _CHARACTERS_DIR != CHARACTERS_DIR:
+        if not _CHARACTERS_DIR.exists():
+            raise FileNotFoundError(f"角色目录不存在: {_CHARACTERS_DIR}")
+
+        for character_dir in sorted(_CHARACTERS_DIR.iterdir()):
+            candidate = character_dir / "personality.yaml"
+            if character_dir.is_dir() and candidate.exists():
+                return candidate
+
+        raise FileNotFoundError(f"未找到可用角色配置: {_CHARACTERS_DIR}/<id>/personality.yaml")
     return resolve_default_character_path()
 
 

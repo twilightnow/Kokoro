@@ -1,4 +1,4 @@
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -33,9 +33,51 @@ class Live2DDisplayConfig(BaseModel):
     mood_motions: Dict[str, str] = Field(default_factory=dict)
 
 
+class Model3DVector3(BaseModel):
+    x: float = 0.0
+    y: float = 0.0
+    z: float = 0.0
+
+
+class Model3DCameraConfig(BaseModel):
+    distance: float = 30.0
+    fov: float = 30.0
+    target: Model3DVector3 = Field(default_factory=Model3DVector3)
+
+
+class Model3DLightConfig(BaseModel):
+    ambient_intensity: float = 0.9
+    directional_intensity: float = 1.1
+    directional_position: Model3DVector3 = Field(default_factory=Model3DVector3)
+
+
+class Model3DSkinConfig(BaseModel):
+    label: str = ""
+    model_url: str
+    scale: float = 1.0
+    position: Model3DVector3 = Field(default_factory=Model3DVector3)
+    rotation_deg: Model3DVector3 = Field(default_factory=Model3DVector3)
+    camera: Model3DCameraConfig = Field(default_factory=Model3DCameraConfig)
+    lights: Model3DLightConfig = Field(default_factory=Model3DLightConfig)
+
+
+class Model3DAutoSwitchConfig(BaseModel):
+    enabled: bool = True
+    prefer_manual: bool = True
+    mood_skins: Dict[str, str] = Field(default_factory=dict)
+
+
+class Model3DDisplayConfig(BaseModel):
+    default_skin: str = ""
+    skin_order: List[str] = Field(default_factory=list)
+    auto_switch: Model3DAutoSwitchConfig = Field(default_factory=Model3DAutoSwitchConfig)
+    skins: Dict[str, Model3DSkinConfig] = Field(default_factory=dict)
+
+
 class CharacterDisplayConfig(BaseModel):
     mode: str = "placeholder"
     live2d: Optional[Live2DDisplayConfig] = None
+    model3d: Optional[Model3DDisplayConfig] = None
 
 
 class SessionTokenTotal(BaseModel):

@@ -12,7 +12,7 @@ from typing import Any, Dict, List
 
 import yaml
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ....character_defaults import (
     DEFAULT_CHARACTER_ENV,
@@ -48,6 +48,8 @@ class CharacterDetail(BaseModel):
     id: str
     raw_yaml: str
     parsed: Dict[str, Any]
+    raw_manifest: str = ""
+    manifest: Dict[str, Any] = Field(default_factory=dict)
 
 
 class UpdateCharacterRequest(BaseModel):
@@ -81,6 +83,7 @@ async def list_characters(service=Depends(get_service)) -> List[CharacterSummary
 @router.get("/{character_id}", response_model=CharacterDetail)
 async def get_character(character_id: str) -> CharacterDetail:
     yaml_path = _CHARACTERS_DIR / character_id / "personality.yaml"
+    manifest_path = _CHARACTERS_DIR / character_id / "manifest.yaml"
     if not yaml_path.exists():
         raise HTTPException(status_code=404, detail=f"角色不存在: {character_id}")
     raw = yaml_path.read_text(encoding="utf-8")
@@ -88,7 +91,23 @@ async def get_character(character_id: str) -> CharacterDetail:
         parsed = yaml.safe_load(raw) or {}
     except yaml.YAMLError as e:
         raise HTTPException(status_code=422, detail=f"YAML 解析失败: {e}")
-    return CharacterDetail(id=character_id, raw_yaml=raw, parsed=parsed)
+
+    raw_manifest = ""
+    manifest: Dict[str, Any] = {}
+    if manifest_path.exists():
+      raw_manifest = manifest_path.read_text(encoding="utf-8")
+      try:
+        manifest = yaml.safe_load(raw_manifest) or {}
+      except yaml.YAMLError as e:
+        raise HTTPException(status_code=422, detail=f"manifest 解析失败: {e}")
+
+    return CharacterDetail(
+        id=character_id,
+        raw_yaml=raw,
+        parsed=parsed,
+        raw_manifest=raw_manifest,
+        manifest=manifest,
+    )
 
 
 @router.put("/{character_id}", status_code=200)

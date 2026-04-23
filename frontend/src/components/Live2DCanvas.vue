@@ -8,8 +8,6 @@ const props = defineProps<{
   mood: Mood
 }>()
 
-const emit = defineEmits<{ (e: 'click'): void }>()
-
 const hostRef = ref<HTMLDivElement | null>(null)
 const canvasRef = ref<HTMLDivElement | null>(null)
 const errorText = ref('')
@@ -81,8 +79,8 @@ function fitModel(): void {
   const height = Math.max(hostRef.value.clientHeight, 1)
   app.renderer.resize(width, height)
 
-  const usableWidth = width * 0.9
-  const usableHeight = height * 0.9
+  const usableWidth = width * 0.98
+  const usableHeight = height * 0.98
   const baseScale = Math.min(
     usableWidth / naturalBounds.width,
     usableHeight / naturalBounds.height,
@@ -96,7 +94,7 @@ function fitModel(): void {
   )
   model.position.set(
     width / 2 + props.config.offset_x,
-    height / 2 + props.config.offset_y,
+    height / 2 + props.config.offset_y + height * 0.04,
   )
 }
 
@@ -207,7 +205,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div ref="hostRef" class="live2d-host" @click="emit('click')">
+  <div ref="hostRef" class="live2d-host">
     <div ref="canvasRef" class="live2d-canvas" />
     <div v-if="errorText" class="live2d-error">
       {{ errorText }}

@@ -1,0 +1,32 @@
+{
+  "model": "星穹铁道—流萤·春日手信.pmx",
+  "scale": 0.085,
+  "position": {
+    "x": 0,
+    "y": 0,
+    "z": 0
+  },
+  "rotation_deg": {
+    "x": 0,
+    "y": 180,
+    "z": 0
+  },
+  "camera": {
+    "distance": 33,
+    "fov": 29,
+    "target": {
+      "x": 0,
+      "y": 10,
+      "z": 0
+    }
+  },
+  "lights": {
+    "ambient_intensity": 0.96,
+    "directional_intensity": 1.14,
+    "directional_position": {
+      "x": 5,
+      "y": 12,
+      "z": 9
+    }
+  }
+}

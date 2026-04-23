@@ -4,6 +4,7 @@
     <nav class="sidebar">
       <div class="sidebar-header">
         <span class="logo">🌸 Kokoro Admin</span>
+        <button class="close-btn" title="关闭" @click="closeWindow">✕</button>
       </div>
       <div class="sidebar-section">
         <router-link
@@ -43,6 +44,14 @@
           <button class="ctrl-btn" title="切换管理界面背景" @click="toggleTheme">
             {{ darkTheme ? '☀️ 浅色' : '🌙 深色' }}
           </button>
+          <button
+            class="ctrl-btn"
+            :class="{ 'ctrl-btn--active': alwaysOnTop }"
+            title="主窗口是否显示在最前面"
+            @click="toggleAlwaysOnTop"
+          >
+            📌 主窗口置顶{{ alwaysOnTop ? ' ON' : ' OFF' }}
+          </button>
         </div>
         <span class="sidebar-status" :class="online ? 'status--online' : 'status--offline'">
           {{ online ? '● 已连接' : '○ 离线' }}
@@ -67,13 +76,60 @@
 <script setup lang="ts">
 import { ref, watch, onMounted, onUnmounted, provide } from 'vue'
 import { api } from './api'
+import { errorDetails, reportClientLog } from '../shared/diagnostics'
+
+/**
+ * ウィンドウを閉じる。
+ * Rust コマンド (close_admin_window) を第一手段とし、
+ * 失敗した場合のみ JS ネイティブの window.close() にフォールバックする。
+ */
+async function closeWindow() {
+  void reportClientLog({
+    source: 'admin-window',
+    event: 'admin-close-click',
+    message: '管理界面关闭按钮被点击',
+  })
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    await invoke('close_admin_window')
+    void reportClientLog({
+      source: 'admin-window',
+      event: 'admin-close-invoke-ok',
+      message: 'close_admin_window invoke completed',
+    })
+  } catch (error) {
+    void reportClientLog({
+      source: 'admin-window',
+      event: 'admin-close-invoke-error',
+      level: 'error',
+      message: 'close_admin_window invoke failed; falling back',
+      details: errorDetails(error),
+    })
+    // core:window:allow-close 権限がある場合は JS API で閉じる
+    try {
+      const { getCurrentWindow } = await import('@tauri-apps/api/window')
+      await getCurrentWindow().close()
+    } catch (fallbackError) {
+      void reportClientLog({
+        source: 'admin-window',
+        event: 'admin-close-fallback-error',
+        level: 'error',
+        message: 'fallback window close failed',
+        details: errorDetails(fallbackError),
+      })
+      window.close()
+    }
+  }
+}
 
 const online = ref(false)
 const passthroughLocked = ref(false)
 const darkTheme = ref(false)
+const alwaysOnTop = ref(false)
 
 const PASSTHROUGH_KEY = 'kokoro-passthrough-lock'
 const THEME_KEY = 'kokoro-admin-theme'
+const MAIN_ALWAYS_ON_TOP_KEY = 'kokoro-main-always-on-top'
 
 interface Toast {
   visible: boolean
@@ -107,6 +163,21 @@ function toggleTheme() {
   localStorage.setItem(THEME_KEY, darkTheme.value ? 'dark' : 'light')
 }
 
+async function toggleAlwaysOnTop() {
+  alwaysOnTop.value = !alwaysOnTop.value
+  localStorage.setItem(MAIN_ALWAYS_ON_TOP_KEY, alwaysOnTop.value ? '1' : '0')
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    await invoke('set_main_always_on_top', { enabled: alwaysOnTop.value })
+  } catch {
+    // 非 Tauri 環境や権限不足の場合は無視
+  }
+  showToast(
+    alwaysOnTop.value ? '已开启主窗口最前面显示' : '已关闭主窗口最前面显示',
+    'info',
+  )
+}
+
 watch(darkTheme, (dark) => {
   const bg = dark ? '#181825' : '#f5f5f5'
   document.body.style.background = bg
@@ -138,14 +209,41 @@ async function checkOnline() {
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
+  void reportClientLog({
+    source: 'admin-window',
+    event: 'admin-app-on-mounted',
+    message: 'AdminApp onMounted started',
+    details: {
+      href: window.location.href,
+      passthroughLocked: localStorage.getItem(PASSTHROUGH_KEY),
+      darkTheme: localStorage.getItem(THEME_KEY),
+      alwaysOnTop: localStorage.getItem(MAIN_ALWAYS_ON_TOP_KEY),
+    },
+  })
   passthroughLocked.value = localStorage.getItem(PASSTHROUGH_KEY) === '1'
   darkTheme.value = localStorage.getItem(THEME_KEY) === 'dark'
+  alwaysOnTop.value = localStorage.getItem(MAIN_ALWAYS_ON_TOP_KEY) === '1'
+
   // Apply theme to html/body immediately to prevent white flash on load
   const bg = darkTheme.value ? '#181825' : '#f5f5f5'
   document.body.style.background = bg
   document.documentElement.style.background = bg
   document.documentElement.style.colorScheme = darkTheme.value ? 'dark' : 'light'
+
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    await invoke('set_main_always_on_top', { enabled: alwaysOnTop.value })
+  } catch (error) {
+    void reportClientLog({
+      source: 'admin-window',
+      event: 'main-window-restore-always-on-top-error',
+      level: 'error',
+      message: 'set_main_always_on_top restore failed',
+      details: errorDetails(error),
+    })
+  }
+
   checkOnline()
   pollTimer = setInterval(checkOnline, 10000)
 })
@@ -280,6 +378,26 @@ body {
 .sidebar-header {
   padding: 18px 16px 14px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.close-btn {
+  background: none;
+  border: none;
+  color: #6c7086;
+  font-size: 14px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  line-height: 1;
+  transition: background 0.15s, color 0.15s;
+}
+
+.close-btn:hover {
+  background: rgba(243, 139, 168, 0.2);
+  color: #f38ba8;
 }
 
 .logo {

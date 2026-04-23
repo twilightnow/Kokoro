@@ -71,6 +71,64 @@
           </div>
           <template v-else>
             <div class="detail-section">
+              <div class="detail-section-title">展示配置</div>
+              <div class="detail-kv">
+                <div class="detail-k">模式</div>
+                <div class="detail-v">{{ selectedChar.manifest?.display?.mode || 'placeholder' }}</div>
+              </div>
+              <template v-if="selectedChar.manifest?.display?.model3d">
+                <div class="detail-kv">
+                  <div class="detail-k">默认皮肤</div>
+                  <div class="detail-v">{{ selectedChar.manifest.display.model3d.default_skin || '—' }}</div>
+                </div>
+                <div class="detail-kv">
+                  <div class="detail-k">自动切换</div>
+                  <div class="detail-v">{{ selectedChar.manifest.display.model3d.auto_switch?.enabled ? '开启' : '关闭' }}</div>
+                </div>
+                <div class="detail-kv">
+                  <div class="detail-k">皮肤列表</div>
+                  <div class="detail-v">
+                    <span
+                      v-for="(skin, skinId) in selectedChar.manifest.display.model3d.skins"
+                      :key="skinId"
+                      class="tag tag-purple"
+                    >
+                      {{ skin.label || skinId }}
+                    </span>
+                  </div>
+                </div>
+                <div class="detail-kv">
+                  <div class="detail-k">情绪映射</div>
+                  <div class="detail-v">
+                    <span
+                      v-for="(skinId, mood) in selectedChar.manifest.display.model3d.auto_switch?.mood_skins"
+                      :key="`${mood}-${skinId}`"
+                      class="tag tag-amber"
+                    >
+                      {{ mood }} → {{ skinId }}
+                    </span>
+                    <span
+                      v-if="!Object.keys(selectedChar.manifest.display.model3d.auto_switch?.mood_skins || {}).length"
+                      class="detail-empty"
+                    >
+                      无
+                    </span>
+                  </div>
+                </div>
+              </template>
+              <template v-else-if="selectedChar.manifest?.display?.live2d">
+                <div class="detail-kv">
+                  <div class="detail-k">模型</div>
+                  <div class="detail-v">{{ selectedChar.manifest.display.live2d.model || '—' }}</div>
+                </div>
+              </template>
+              <details v-if="selectedChar.raw_manifest" class="manifest-raw">
+                <summary>查看 manifest.yaml</summary>
+                <textarea :value="selectedChar.raw_manifest" rows="14" readonly />
+              </details>
+            </div>
+
+            <div class="detail-section">
               <div class="detail-section-title">人格核心</div>
               <div class="detail-kv">
                 <div class="detail-k">核心恐惧</div>
@@ -354,6 +412,29 @@ onMounted(load)
 
 .tag-red { background: #fee2e2; color: #b91c1c; }
 .tag-blue { background: #dbeafe; color: #1d4ed8; }
+.tag-purple { background: #ede9fe; color: #6d28d9; }
+.tag-amber { background: #fef3c7; color: #92400e; }
+
+.manifest-raw {
+  margin-top: 12px;
+}
+
+.manifest-raw summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.manifest-raw textarea {
+  width: 100%;
+  margin-top: 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 10px;
+  font-family: monospace;
+  font-size: 12px;
+  background: #f9fafb;
+}
 
 @media (max-width: 1100px) {
   .char-layout {

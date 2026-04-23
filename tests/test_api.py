@@ -29,6 +29,13 @@ def _make_mock_llm():
     mock_result.provider = "mock"
     mock_llm = MagicMock()
     mock_llm.chat.return_value = mock_result
+
+    def _stream_chat(_system_prompt, _messages):
+        yield "测试"
+        yield "回复"
+        return mock_result
+
+    mock_llm.stream_chat.side_effect = _stream_chat
     return mock_llm
 
 
@@ -204,7 +211,7 @@ class TestStreamWebSocket(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def test_ws_sends_thinking_and_done(self):
+    def test_ws_sends_thinking_token_and_done(self):
         import json
         from src.api.app import create_app
         with patch("src.application.conversation_service.create_llm_client",
@@ -214,10 +221,15 @@ class TestStreamWebSocket(unittest.TestCase):
                 with TestClient(app) as client:
                     with client.websocket_connect("/stream") as ws:
                         ws.send_text(json.dumps({"message": "你好"}))
-                        msg1 = json.loads(ws.receive_text())
-                        msg2 = json.loads(ws.receive_text())
-        types = {msg1["type"], msg2["type"]}
+                        received = []
+                        while True:
+                            msg = json.loads(ws.receive_text())
+                            received.append(msg)
+                            if msg["type"] == "done":
+                                break
+        types = {msg["type"] for msg in received}
         self.assertIn("thinking", types)
+        self.assertIn("token", types)
         self.assertIn("done", types)
 
     def test_ws_invalid_json_returns_error(self):
@@ -232,6 +244,48 @@ class TestStreamWebSocket(unittest.TestCase):
                         ws.send_text("这不是JSON")
                         msg = json.loads(ws.receive_text())
         self.assertEqual(msg["type"], "error")
+
+
+@unittest.skipUnless(_HAS_FASTAPI, "fastapi/httpx 未安装，跳过 API 测试")
+class TestTTSEndpoint(unittest.TestCase):
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        char_path = Path(self.tmp.name) / "char.yaml"
+        import yaml
+        char_data = {
+            "name": "测试角色",
+            "forbidden_words": [],
+            "emotion_triggers": {},
+            "mood_expressions": {"normal": "平静"},
+        }
+        with open(char_path, "w", encoding="utf-8") as f:
+            yaml.dump(char_data, f, allow_unicode=True)
+        self.char_path = char_path
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_tts_returns_audio(self):
+        from src.api.app import create_app
+
+        class MockTTS:
+            async def synthesize(self, text):
+                self.last_text = text
+                from src.capability.tts import TTSResult
+                return TTSResult(audio_bytes=b"fake-mp3", voice="mock-voice")
+
+        with patch("src.application.conversation_service.create_llm_client",
+                   return_value=_make_mock_llm()):
+            with patch("src.api.app._CHARACTER_PATH", self.char_path):
+                with patch("src.api.routes.tts.create_tts_client", return_value=MockTTS()):
+                    app = create_app()
+                    with TestClient(app) as client:
+                        resp = client.post("/tts", json={"text": "你好，世界"})
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.content, b"fake-mp3")
+        self.assertEqual(resp.headers["content-type"], "audio/mpeg")
 
 
 if __name__ == "__main__":

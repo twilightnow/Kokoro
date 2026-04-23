@@ -13,11 +13,13 @@ import { useWindowPosition } from './composables/useWindowPosition'
 import { sidecarHttpUrl } from './shared/sidecar'
 import { errorDetails, reportClientLog } from './shared/diagnostics'
 import type { CharacterDisplayConfig } from './types/chat'
+import { useSpeechOutput } from './composables/useSpeechOutput'
 
 const chatStore = useChatStore()
 const { status, errorMessage, init, sendMessage, syncState } = useChat()
 const { setup: setupEdgeSnap } = useEdgeSnap()
 const { restorePosition, startTracking } = useWindowPosition()
+const { lipSyncLevel, speechError } = useSpeechOutput()
 
 const PASSTHROUGH_KEY = 'kokoro-passthrough-lock'
 const MAIN_ALWAYS_ON_TOP_KEY = 'kokoro-main-always-on-top'
@@ -168,6 +170,12 @@ async function openAdmin(): Promise<void> {
       </div>
     </Transition>
 
+    <Transition name="banner">
+      <div v-if="speechError" class="status-banner status-banner--speech">
+        {{ speechError }}
+      </div>
+    </Transition>
+
     <button class="admin-button" type="button" title="管理界面" @click="openAdmin">
       ⚙
     </button>
@@ -189,6 +197,7 @@ async function openAdmin(): Promise<void> {
           :character-name="chatStore.characterName"
           :display="chatStore.display"
           :turn="chatStore.turn"
+          :lip-sync-level="lipSyncLevel"
         />
       </div>
     </div>
@@ -272,6 +281,11 @@ body {
   z-index: 100;
   font-family: sans-serif;
   line-height: 1.4;
+}
+
+.status-banner--speech {
+  top: 30px;
+  background: rgba(62, 108, 181, 0.9);
 }
 
 .admin-button {

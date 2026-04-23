@@ -52,13 +52,31 @@ class Model3DLightConfig(BaseModel):
 
 
 class Model3DSkinConfig(BaseModel):
+    class MorphWeight(BaseModel):
+        name: str
+        weight: float = 0.0
+
+    class LipSyncConfig(BaseModel):
+        names: List[str] = Field(default_factory=list)
+        max_weight: float = 0.75
+        smoothing: float = 0.22
+
+    class MorphConfig(BaseModel):
+        mood_weights: Dict[str, List["Model3DSkinConfig.MorphWeight"]] = Field(default_factory=dict)
+        lip_sync: Optional["Model3DSkinConfig.LipSyncConfig"] = None
+
     label: str = ""
     model_url: str
+    vmd_url: Optional[str] = None
+    mood_vmd_urls: Dict[str, str] = Field(default_factory=dict)
+    procedural_motion: str = "idle"
+    mood_procedural_motions: Dict[str, str] = Field(default_factory=dict)
     scale: float = 1.0
     position: Model3DVector3 = Field(default_factory=Model3DVector3)
     rotation_deg: Model3DVector3 = Field(default_factory=Model3DVector3)
     camera: Model3DCameraConfig = Field(default_factory=Model3DCameraConfig)
     lights: Model3DLightConfig = Field(default_factory=Model3DLightConfig)
+    morphs: Optional["Model3DSkinConfig.MorphConfig"] = None
 
 
 class Model3DAutoSwitchConfig(BaseModel):
@@ -111,8 +129,18 @@ class SwitchCharacterResponse(BaseModel):
     status: str = "ok"
 
 
+class TTSRequest(BaseModel):
+    text: str = Field(..., min_length=1, max_length=400)
+    voice: Optional[str] = Field(default=None, max_length=80)
+    rate: Optional[str] = Field(default=None, max_length=16)
+    volume: Optional[str] = Field(default=None, max_length=16)
+
+
 class StreamChunk(BaseModel):
     type: str
     content: str
     mood: Optional[str] = None
     flagged: Optional[bool] = None
+
+
+Model3DSkinConfig.model_rebuild()

@@ -31,6 +31,7 @@ import os
 import shutil
 import subprocess
 from abc import ABC, abstractmethod
+from collections.abc import Generator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Mapping, Optional, Tuple
@@ -68,6 +69,16 @@ class LLMClient(ABC):
     @abstractmethod
     def chat(self, system_prompt: str, messages: List[Dict[str, str]]) -> LLMResult:
         pass
+
+    def stream_chat(
+        self,
+        system_prompt: str,
+        messages: List[Dict[str, str]],
+    ) -> Generator[str, None, LLMResult]:
+        result = self.chat(system_prompt, messages)
+        if result.text:
+            yield result.text
+        return result
 
 
 @dataclass(frozen=True)
@@ -424,6 +435,41 @@ class AnthropicClient(LLMClient):
             finish_reason=response.stop_reason or "",
         )
 
+    def stream_chat(
+        self,
+        system_prompt: str,
+        messages: List[Dict[str, str]],
+    ) -> Generator[str, None, LLMResult]:
+        chunks: List[str] = []
+        try:
+            with self._client.messages.stream(
+                model=self.model,
+                max_tokens=_get_max_tokens(),
+                system=system_prompt,
+                messages=messages,
+            ) as stream:
+                for text in stream.text_stream:
+                    if not text:
+                        continue
+                    chunks.append(text)
+                    yield text
+                final_message = stream.get_final_message()
+        except anthropic.AuthenticationError as exc:
+            raise RuntimeError("Anthropic 鉴权失败：ANTHROPIC_API_KEY 无效。") from exc
+        except anthropic.RateLimitError as exc:
+            raise RuntimeError("Anthropic API 触发速率限制，请稍后重试。") from exc
+        except Exception as exc:
+            raise RuntimeError(f"Anthropic API 调用失败: {exc}") from exc
+
+        return LLMResult(
+            text="".join(chunks).strip(),
+            model=self.model,
+            provider=self.provider,
+            input_tokens=final_message.usage.input_tokens,
+            output_tokens=final_message.usage.output_tokens,
+            finish_reason=final_message.stop_reason or "",
+        )
+
 
 class OpenAICompatibleClient(LLMClient):
     MAX_TOKENS = 1024
@@ -486,6 +532,63 @@ class OpenAICompatibleClient(LLMClient):
             input_tokens=usage.prompt_tokens if usage else 0,
             output_tokens=usage.completion_tokens if usage else 0,
             finish_reason=response.choices[0].finish_reason or "",
+        )
+
+    def stream_chat(
+        self,
+        system_prompt: str,
+        messages: List[Dict[str, str]],
+    ) -> Generator[str, None, LLMResult]:
+        request_messages = [{"role": "system", "content": system_prompt}, *messages]
+        chunks: List[str] = []
+        input_tokens = 0
+        output_tokens = 0
+        finish_reason = ""
+        try:
+            stream = self._client.chat.completions.create(
+                model=self.model,
+                messages=request_messages,
+                max_completion_tokens=_get_max_tokens(),
+                stream=True,
+                stream_options={"include_usage": True},
+            )
+            for chunk in stream:
+                if getattr(chunk, "usage", None):
+                    input_tokens = chunk.usage.prompt_tokens or input_tokens
+                    output_tokens = chunk.usage.completion_tokens or output_tokens
+
+                choices = getattr(chunk, "choices", None) or []
+                if not choices:
+                    continue
+
+                choice = choices[0]
+                finish_reason = getattr(choice, "finish_reason", None) or finish_reason
+                delta = getattr(choice, "delta", None)
+                content = getattr(delta, "content", None) if delta is not None else None
+                if isinstance(content, str) and content:
+                    chunks.append(content)
+                    yield content
+                elif isinstance(content, list):
+                    text = "".join(getattr(item, "text", "") for item in content)
+                    if text:
+                        chunks.append(text)
+                        yield text
+        except OpenAIAuthenticationError as exc:
+            config = PROVIDER_CONFIGS[self.provider]
+            all_envs = [config.api_key_env, *config.api_key_env_fallbacks]
+            raise RuntimeError(
+                f"{self.provider} 鉴权失败：{' / '.join(all_envs)} 无效。"
+            ) from exc
+        except Exception as exc:
+            raise RuntimeError(f"{self.provider} API 调用失败: {exc}") from exc
+
+        return LLMResult(
+            text="".join(chunks).strip(),
+            model=self.model,
+            provider=self.provider,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            finish_reason=finish_reason,
         )
 
 

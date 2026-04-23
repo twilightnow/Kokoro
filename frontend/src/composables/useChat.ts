@@ -2,6 +2,7 @@ import { ref } from 'vue'
 import { useChatStore } from '../stores/chat'
 import type { CharacterDisplayConfig, Mood, StreamChunk } from '../types/chat'
 import { sidecarHttpUrl, sidecarWsUrl } from '../shared/sidecar'
+import { useSpeechOutput } from './useSpeechOutput'
 
 const WS_URL = sidecarWsUrl('/stream')
 const HEALTH_URL = sidecarHttpUrl('/health')
@@ -23,6 +24,7 @@ const errorMessage = ref<string>('')
 let ws: WebSocket | null = null
 let retryCount = 0
 let pendingMessage: string | null = null
+const speechOutput = useSpeechOutput()
 
 function isMood(value: unknown): value is Mood {
   return typeof value === 'string' && value.trim().length > 0
@@ -57,23 +59,28 @@ function _handleChunk(raw: string): void {
   switch (chunk.type) {
     case 'thinking':
       store.setThinking(true)
+      speechOutput.beginStream()
       break
     case 'token':
       store.appendReply(chunk.content)
+      speechOutput.pushToken(chunk.content)
       break
     case 'done':
       store.setThinking(false)
       if (chunk.content) store.setReply(chunk.content)
       if (isMood(chunk.mood)) store.setMood(chunk.mood)
+      speechOutput.finishStream(chunk.content)
       store.incrementTurn()
       break
     case 'error':
       store.setThinking(false)
+      speechOutput.stop()
       errorMessage.value = chunk.content
       break
     case 'proactive':
       store.setThinking(false)
       store.setProactiveMessage(chunk.content)
+      speechOutput.speakNow(chunk.content)
       break
     default:
       break

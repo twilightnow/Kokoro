@@ -1,24 +1,26 @@
 <script setup lang="ts">
 import {
+  AnimationClip,
   AmbientLight,
   Box3,
+  Clock,
   Color,
   DirectionalLight,
   MathUtils,
   Object3D,
   PerspectiveCamera,
   Scene,
-  SkinnedMesh,
   Vector3,
   WebGLRenderer,
 } from 'three'
-import { MMDLoader } from 'three-stdlib'
+import { MMDAnimationHelper, MMDLoader } from 'three-stdlib'
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { Model3DSkinConfig, Mood } from '../types/chat'
 
 const props = defineProps<{
   skin: Model3DSkinConfig
   mood: Mood
+  lipSyncLevel: number
 }>()
 
 const hostRef = ref<HTMLDivElement | null>(null)
@@ -37,11 +39,21 @@ let scene: Scene | null = null
 let camera: PerspectiveCamera | null = null
 let ambientLight: AmbientLight | null = null
 let directionalLight: DirectionalLight | null = null
-let currentModel: SkinnedMesh | null = null
+type MorphCapableObject = Object3D & {
+  morphTargetDictionary?: Record<string, number>
+  morphTargetInfluences?: number[]
+}
+
+let currentModel: Object3D | null = null
 let loader: MMDLoader | null = null
+let helper: MMDAnimationHelper | null = null
+let clock: Clock | null = null
+let animationPlaying = false
 let resizeObserver: ResizeObserver | null = null
 let animationFrame = 0
 let disposed = false
+let activeAnimationUrl = ''
+let smoothedLipSync = 0
 
 function disposeMaterial(material: unknown): void {
   if (!material || typeof material !== 'object') {
@@ -57,6 +69,8 @@ function disposeModel(): void {
   if (!currentModel) {
     return
   }
+
+  disposeAnimation()
 
   currentModel.traverse((child: Object3D) => {
     const mesh = child as {
@@ -74,6 +88,19 @@ function disposeModel(): void {
 
   scene?.remove(currentModel)
   currentModel = null
+}
+
+function disposeAnimation(): void {
+  if (helper && currentModel) {
+    try {
+      helper.remove(currentModel as never)
+    } catch {
+      // Helper state can already be detached.
+    }
+  }
+  helper = null
+  animationPlaying = false
+  activeAnimationUrl = ''
 }
 
 function resizeRenderer(): void {
@@ -141,6 +168,121 @@ function applyModelTransform(): void {
   )
 }
 
+function resolveAnimationUrl(): string {
+  return props.skin.mood_vmd_urls?.[props.mood] ?? props.skin.vmd_url ?? ''
+}
+
+function resolveProceduralMotion(): string {
+  return props.skin.mood_procedural_motions?.[props.mood]
+    ?? props.skin.procedural_motion
+    ?? 'idle'
+}
+
+function findMorphIndex(mesh: MorphCapableObject, name: string): number {
+  const dictionary = mesh.morphTargetDictionary
+  if (!dictionary) {
+    return -1
+  }
+
+  const direct = dictionary[name]
+  if (typeof direct === 'number') {
+    return direct
+  }
+
+  const normalized = name.trim().toLowerCase()
+  for (const [key, index] of Object.entries(dictionary)) {
+    if (key.trim().toLowerCase() === normalized) {
+      return index
+    }
+  }
+
+  return -1
+}
+
+function applyMorphWeights(): void {
+  if (!currentModel) {
+    return
+  }
+
+  const morphConfig = props.skin.morphs
+  if (!morphConfig) {
+    return
+  }
+
+  const targetWeights = new Map<string, number>()
+  for (const weights of Object.values(morphConfig.mood_weights ?? {})) {
+    for (const item of weights) {
+      targetWeights.set(item.name, 0)
+    }
+  }
+
+  for (const item of morphConfig.mood_weights?.[props.mood] ?? []) {
+    targetWeights.set(item.name, item.weight)
+  }
+
+  const lipSync = morphConfig.lip_sync
+  if (lipSync?.names?.length) {
+    smoothedLipSync = MathUtils.lerp(smoothedLipSync, props.lipSyncLevel, lipSync.smoothing)
+    const mouthWeight = Math.min(1, smoothedLipSync) * lipSync.max_weight
+    for (const name of lipSync.names) {
+      targetWeights.set(name, Math.max(targetWeights.get(name) ?? 0, mouthWeight))
+    }
+  } else {
+    smoothedLipSync = 0
+  }
+
+  currentModel.traverse((child) => {
+    const mesh = child as MorphCapableObject
+    if (!mesh.morphTargetDictionary || !mesh.morphTargetInfluences) {
+      return
+    }
+
+    for (const [name, weight] of targetWeights.entries()) {
+      const index = findMorphIndex(mesh, name)
+      if (index >= 0) {
+        mesh.morphTargetInfluences[index] = weight
+      }
+    }
+  })
+}
+
+async function loadAnimationForCurrentMood(force = false): Promise<void> {
+  if (!loader || !currentModel || disposed) {
+    return
+  }
+
+  const nextAnimationUrl = resolveAnimationUrl()
+  if (!force && nextAnimationUrl === activeAnimationUrl) {
+    return
+  }
+
+  disposeAnimation()
+  if (!nextAnimationUrl) {
+    return
+  }
+
+  helper = new MMDAnimationHelper({ resetPhysicsOnLoop: true })
+  await new Promise<void>((resolve) => {
+    loader!.loadAnimation(
+      nextAnimationUrl,
+      currentModel as never,
+      (clip) => {
+        helper!.add(currentModel as never, { animation: clip as AnimationClip, physics: false })
+        animationPlaying = true
+        activeAnimationUrl = nextAnimationUrl
+        console.info('[model3d] animation loaded:', nextAnimationUrl)
+        resolve()
+      },
+      undefined,
+      (err) => {
+        console.warn('[model3d] failed to load animation', err)
+        disposeAnimation()
+        resolve()
+      },
+    )
+  })
+}
+
 async function loadModel(): Promise<void> {
   if (!loader || !scene || disposed) {
     return
@@ -167,7 +309,8 @@ async function loadModel(): Promise<void> {
     const size = box.getSize(new Vector3())
     const center = box.getCenter(new Vector3())
     console.info('[model3d] loaded — size:', size, 'center:', center)
-    console.info('[model3d] camera target.y:', props.skin.camera.target.y, 'distance:', props.skin.camera.distance)
+
+    await loadAnimationForCurrentMood(true)
   } catch (error) {
     console.error('[model3d] failed to load model', error)
     errorText.value = '3D 模型加载失败'
@@ -179,10 +322,40 @@ function renderFrame(): void {
     return
   }
 
-  if (currentModel) {
-    currentModel.rotation.y = MathUtils.degToRad(props.skin.rotation_deg.y)
-      + Math.sin(performance.now() / 900) * 0.025
+  const delta = clock?.getDelta() ?? 0
+
+  if (animationPlaying && helper) {
+    helper.update(delta)
+  } else if (currentModel) {
+    const t = performance.now()
+    const baseRotation = MathUtils.degToRad(props.skin.rotation_deg.y)
+    const mode = resolveProceduralMotion()
+
+    switch (mode) {
+      case 'cheer':
+        currentModel.rotation.y = baseRotation + Math.sin(t / 380) * 0.065
+        currentModel.position.y = props.skin.position.y + Math.abs(Math.sin(t / 300)) * 0.22
+        break
+      case 'stomp':
+        currentModel.rotation.y = baseRotation + Math.sin(t / 220) * 0.02
+        currentModel.position.y = props.skin.position.y + Math.max(0, Math.sin(t / 180)) * 0.12
+        break
+      case 'glide':
+        currentModel.rotation.y = baseRotation + Math.sin(t / 1200) * 0.018
+        currentModel.position.y = props.skin.position.y + Math.sin(t / 2600) * 0.035
+        break
+      case 'breathe':
+        currentModel.rotation.y = baseRotation + Math.sin(t / 1100) * 0.015
+        currentModel.position.y = props.skin.position.y + Math.sin(t / 1800) * 0.08
+        break
+      default:
+        currentModel.rotation.y = baseRotation + Math.sin(t / 900) * 0.025
+        currentModel.position.y = props.skin.position.y + Math.sin(t / 2000) * 0.06
+        break
+    }
   }
+
+  applyMorphWeights()
 
   renderer.render(scene, camera)
   animationFrame = window.requestAnimationFrame(renderFrame)
@@ -202,6 +375,7 @@ function mountRenderer(): void {
   ambientLight = new AmbientLight(0xffffff, props.skin.lights.ambient_intensity)
   directionalLight = new DirectionalLight(0xffffff, props.skin.lights.directional_intensity)
   loader = new MMDLoader()
+  clock = new Clock()
 
   scene.add(ambientLight)
   scene.add(directionalLight)
@@ -223,24 +397,39 @@ onMounted(async () => {
   await loadModel()
 })
 
+// Only reload the model when the URL actually changes; apply visual updates otherwise.
+// This prevents the 3-second state sync from causing flickering.
 watch(
   () => props.skin,
-  async () => {
+  async (newSkin, oldSkin) => {
     if (!renderer) {
       return
     }
 
     applyCamera()
     applyLighting()
-    await loadModel()
+    applyModelTransform()
+
+    const nextAnimationUrl = newSkin.mood_vmd_urls?.[props.mood] ?? newSkin.vmd_url ?? ''
+    const prevAnimationUrl = oldSkin?.mood_vmd_urls?.[props.mood] ?? oldSkin?.vmd_url ?? ''
+
+    if (!oldSkin || newSkin.model_url !== oldSkin.model_url) {
+      await loadModel()
+      return
+    }
+
+    if (nextAnimationUrl !== prevAnimationUrl) {
+      await loadAnimationForCurrentMood()
+    }
   },
   { deep: true },
 )
 
 watch(
   () => props.mood,
-  () => {
+  async () => {
     applyLighting()
+    await loadAnimationForCurrentMood()
   },
 )
 
@@ -259,6 +448,7 @@ onBeforeUnmount(() => {
   ambientLight = null
   directionalLight = null
   loader = null
+  clock = null
 })
 </script>
 

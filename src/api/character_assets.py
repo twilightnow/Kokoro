@@ -160,9 +160,82 @@ def _build_model3d_display(character_id: str, base_url: str, display: dict[str, 
         camera = scene.get("camera")
         lights = scene.get("lights")
 
+        vmd_url: str | None = None
+        vmd_file = scene.get("vmd")
+        if isinstance(vmd_file, str) and vmd_file.strip():
+            vmd_path = _resolve_within(asset_root, scene_path.parent / vmd_file)
+            if vmd_path.exists() and vmd_path.is_file():
+                vmd_relative = vmd_path.relative_to(asset_root).as_posix()
+                vmd_url = _asset_url(character_id, vmd_relative, base_url)
+
+        mood_vmd_urls: dict[str, str] = {}
+        raw_mood_vmds = scene.get("mood_vmds")
+        if isinstance(raw_mood_vmds, dict):
+            for mood, mood_vmd_file in raw_mood_vmds.items():
+                if not isinstance(mood_vmd_file, str) or not mood_vmd_file.strip():
+                    continue
+                mood_vmd_path = _resolve_within(asset_root, scene_path.parent / mood_vmd_file)
+                if mood_vmd_path.exists() and mood_vmd_path.is_file():
+                    mood_vmd_relative = mood_vmd_path.relative_to(asset_root).as_posix()
+                    mood_vmd_urls[str(mood)] = _asset_url(character_id, mood_vmd_relative, base_url)
+
+        raw_morphs = scene.get("morphs")
+        morphs: dict[str, Any] | None = None
+        if isinstance(raw_morphs, dict):
+            mood_weights: dict[str, list[dict[str, Any]]] = {}
+            raw_mood_weights = raw_morphs.get("mood_weights")
+            if isinstance(raw_mood_weights, dict):
+                for mood, values in raw_mood_weights.items():
+                    if not isinstance(values, list):
+                        continue
+                    normalized_values = []
+                    for value in values:
+                        if not isinstance(value, dict):
+                            continue
+                        name = value.get("name")
+                        if not isinstance(name, str) or not name.strip():
+                            continue
+                        normalized_values.append({
+                            "name": name,
+                            "weight": _as_float(value.get("weight"), 0.0),
+                        })
+                    if normalized_values:
+                        mood_weights[str(mood)] = normalized_values
+
+            raw_lip_sync = raw_morphs.get("lip_sync")
+            lip_sync: dict[str, Any] | None = None
+            if isinstance(raw_lip_sync, dict):
+                raw_names = raw_lip_sync.get("names")
+                lip_sync = {
+                    "names": [
+                        str(name)
+                        for name in (raw_names if isinstance(raw_names, list) else [])
+                        if isinstance(name, str) and name.strip()
+                    ],
+                    "max_weight": _as_float(raw_lip_sync.get("max_weight"), 0.75),
+                    "smoothing": _as_float(raw_lip_sync.get("smoothing"), 0.22),
+                }
+                if not lip_sync["names"]:
+                    lip_sync = None
+
+            if mood_weights or lip_sync:
+                morphs = {}
+                if mood_weights:
+                    morphs["mood_weights"] = mood_weights
+                if lip_sync:
+                    morphs["lip_sync"] = lip_sync
+
         skins[str(skin_id)] = {
             "label": str(raw_skin.get("label") or scene.get("label") or skin_id),
             "model_url": _asset_url(character_id, model_relative, base_url),
+            **({"vmd_url": vmd_url} if vmd_url else {}),
+            "mood_vmd_urls": mood_vmd_urls,
+            "procedural_motion": str(scene.get("procedural_motion") or "idle"),
+            "mood_procedural_motions": {
+                str(mood): str(mode)
+                for mood, mode in (scene.get("mood_procedural_motions") or {}).items()
+                if isinstance(mood, str) and isinstance(mode, str) and mode.strip()
+            },
             "scale": _as_float(scene.get("scale"), 1.0),
             "position": _vector3(scene.get("position"), (0.0, -10.0, 0.0)),
             "rotation_deg": _vector3(scene.get("rotation_deg"), (0.0, 180.0, 0.0)),
@@ -179,6 +252,7 @@ def _build_model3d_display(character_id: str, base_url: str, display: dict[str, 
                     (5.0, 12.0, 9.0),
                 ),
             },
+            **({"morphs": morphs} if morphs else {}),
         }
 
     if not skins:

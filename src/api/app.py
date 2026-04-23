@@ -71,11 +71,12 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    from .routes import chat, state, stream
+    from .routes import chat, state, stream, tts
     from .routes.admin import router as admin_router
     app.include_router(chat.router)
     app.include_router(state.router)
     app.include_router(stream.router)
+    app.include_router(tts.router)
     app.include_router(admin_router)
 
     return app

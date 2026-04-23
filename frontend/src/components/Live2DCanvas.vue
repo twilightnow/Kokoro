@@ -6,6 +6,7 @@ import type { Live2DDisplayConfig, Mood } from '../types/chat'
 const props = defineProps<{
   config: Live2DDisplayConfig
   mood: Mood
+  lipSyncLevel: number
 }>()
 
 const hostRef = ref<HTMLDivElement | null>(null)
@@ -107,6 +108,27 @@ async function playMotion(group?: string): Promise<void> {
   }
 }
 
+function applyLipSync(level: number): void {
+  const coreModel = (model as unknown as {
+    internalModel?: {
+      coreModel?: {
+        setParameterValueById?: (id: string, value: number) => void
+      }
+    }
+  }).internalModel?.coreModel
+  if (!coreModel?.setParameterValueById) {
+    return
+  }
+
+  const normalized = Math.max(0, Math.min(level, 1))
+  try {
+    coreModel.setParameterValueById('ParamMouthOpenY', normalized)
+    coreModel.setParameterValueById('ParamMouthForm', Math.min(1, normalized * 0.35))
+  } catch {
+    // Some models may not expose mouth parameters.
+  }
+}
+
 async function mountModel(): Promise<void> {
   if (!hostRef.value) return
   errorText.value = ''
@@ -187,6 +209,13 @@ watch(
     if (group) {
       await playMotion(group)
     }
+  },
+)
+
+watch(
+  () => props.lipSyncLevel,
+  (level) => {
+    applyLipSync(level)
   },
 )
 

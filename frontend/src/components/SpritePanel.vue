@@ -11,6 +11,7 @@ const props = defineProps<{
   characterName?: string
   display?: CharacterDisplayConfig
   turn?: number
+  lipSyncLevel?: number
 }>()
 
 type MoodVisual = { emoji: string; label: string; bg: string; border: string; text: string }
@@ -141,11 +142,13 @@ function clearManualSkin(): void {
           v-if="live2dConfig"
           :config="live2dConfig"
           :mood="mood"
+          :lip-sync-level="lipSyncLevel ?? 0"
         />
         <Model3DCanvas
           v-else-if="activeModel3dSkin"
           :skin="activeModel3dSkin"
           :mood="mood"
+          :lip-sync-level="lipSyncLevel ?? 0"
         />
         <template v-else>
           <div class="sprite-emoji">{{ currentMood.emoji }}</div>

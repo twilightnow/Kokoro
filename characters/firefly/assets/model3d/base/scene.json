@@ -1,6 +1,6 @@
 {
   "model": "星穹铁道—流萤·春日手信.pmx",
-  "scale": 0.085,
+  "scale": 0.85,
   "position": {
     "x": 0,
     "y": 0,
@@ -11,12 +11,42 @@
     "y": 180,
     "z": 0
   },
+  "procedural_motion": "idle",
+  "mood_procedural_motions": {
+    "happy": "cheer",
+    "angry": "stomp",
+    "shy": "breathe",
+    "cold": "glide"
+  },
+  "morphs": {
+    "mood_weights": {
+      "happy": [
+        { "name": "smile", "weight": 0.55 },
+        { "name": "eye_smile", "weight": 0.3 }
+      ],
+      "angry": [
+        { "name": "angry", "weight": 0.62 },
+        { "name": "brow_down", "weight": 0.4 }
+      ],
+      "shy": [
+        { "name": "blush", "weight": 0.48 }
+      ],
+      "cold": [
+        { "name": "half_lid", "weight": 0.35 }
+      ]
+    },
+    "lip_sync": {
+      "names": ["あ", "い", "う", "え", "お", "mouth_a", "mouth_open"],
+      "max_weight": 0.7,
+      "smoothing": 0.24
+    }
+  },
   "camera": {
-    "distance": 33,
-    "fov": 29,
+    "distance": 30,
+    "fov": 36,
     "target": {
       "x": 0,
-      "y": 10,
+      "y": 9,
       "z": 0
     }
   },

@@ -6,7 +6,7 @@
 import os
 import sys
 from pathlib import Path
-from typing import Optional, TYPE_CHECKING
+from typing import Callable, Optional, TYPE_CHECKING
 
 from ..capability.llm import LLMResult, create_llm_client
 from ..logger.session_log import SessionLogger
@@ -188,17 +188,66 @@ class ConversationService:
 
         此方法可供测试直接调用，无需走完整的 run() 循环。
         """
+        system_prompt, mood_before = self._prepare_turn(user_input)
+        try:
+            result: LLMResult = self._llm.chat(
+                system_prompt,
+                self._memory.working_memory.get_messages(),
+            )
+        except RuntimeError as e:
+            print(f"错误: {e}", file=sys.stderr)
+            return None
+        return self._finalize_turn(user_input, mood_before, result)
+
+    def handle_turn_stream(
+        self,
+        user_input: str,
+        on_token: Optional[Callable[[str], None]] = None,
+    ) -> Optional[str]:
+        """处理单轮对话，并在回复生成过程中通过回调输出增量 token。"""
+        system_prompt, mood_before = self._prepare_turn(user_input)
+        parts: list[str] = []
+
+        try:
+            stream = self._llm.stream_chat(
+                system_prompt,
+                self._memory.working_memory.get_messages(),
+            )
+            while True:
+                try:
+                    token = next(stream)
+                except StopIteration as stop:
+                    result = stop.value
+                    break
+                if not token:
+                    continue
+                parts.append(token)
+                if on_token:
+                    on_token(token)
+        except RuntimeError as e:
+            print(f"错误: {e}", file=sys.stderr)
+            return None
+
+        if result is None:
+            result = LLMResult(
+                text="".join(parts).strip(),
+                model=getattr(self._llm, "model", ""),
+                provider=getattr(self._llm, "provider", ""),
+            )
+        elif not result.text:
+            result.text = "".join(parts).strip()
+
+        return self._finalize_turn(user_input, mood_before, result)
+
+    def _prepare_turn(self, user_input: str) -> tuple[str, str]:
         self._turn += 1
         config = self._config
         mood_before = self._state.mood
 
-        # 1. 情绪检测（不修改状态，返回事件名或 None）
         event = detect_event(user_input, config.emotion_triggers)
-        # 2. 情绪状态跃迁或衰减
         self._state.update(event)
         mood_after = self._state.mood
 
-        # 3. 工作记忆：截断后追加本轮用户输入
         wm = self._memory.working_memory
         prev_len = len(wm)
         wm.truncate()
@@ -206,7 +255,6 @@ class ConversationService:
             self._working_memory_truncation_count += 1
         wm.add("user", user_input)
 
-        # 4. 构建 prompt 上下文（记忆 + 感知）
         character_id = self._character_id
         memory_ctx = self._memory.get_context(character_id, token_budget=self._MEMORY_TOKEN_BUDGET)
         self._last_memory_ctx = memory_ctx
@@ -241,24 +289,15 @@ class ConversationService:
             print(f"[DEBUG] system prompt（前200字）: {system_prompt[:200]}...")
             print(f"[DEBUG] history 长度: {len(wm)} 条")
 
-        # 5. LLM 调用
-        try:
-            result: LLMResult = self._llm.chat(system_prompt, wm.get_messages())
-        except RuntimeError as e:
-            print(f"错误: {e}", file=sys.stderr)
-            return None
+        return system_prompt, mood_before
 
+    def _finalize_turn(self, user_input: str, mood_before: str, result: LLMResult) -> str:
         reply = result.text
-        wm.add("assistant", reply)
-
-        # 累计 session token
+        self._memory.working_memory.add("assistant", reply)
         self._session_token_input += result.input_tokens
         self._session_token_output += result.output_tokens
 
-        # 6. 禁用词检查
-        flagged = _check_forbidden(reply, config.forbidden_words)
-
-        # 7. 构建 usage 字段（token 消耗，CLI 模式下为 0）
+        flagged = _check_forbidden(reply, self._config.forbidden_words)
         usage = None
         if result.input_tokens or result.output_tokens:
             usage = {
@@ -268,12 +307,11 @@ class ConversationService:
                 "provider": result.provider,
             }
 
-        # 8. 日志写入，并缓存最近一条
         self._logger.log(
             turn=self._turn,
             user_input=user_input,
             mood_before=mood_before,
-            mood_after=mood_after,
+            mood_after=self._state.mood,
             persist_count=self._state.persist_count,
             reply=reply,
             flagged=flagged,

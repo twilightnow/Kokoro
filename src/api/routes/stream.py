@@ -48,23 +48,41 @@ async def stream(websocket: WebSocket) -> None:
                 StreamChunk(type="thinking", content="").model_dump_json()
             )
 
-            reply = await asyncio.to_thread(service.handle_turn, message)
+            loop = asyncio.get_running_loop()
+            queue: asyncio.Queue[dict] = asyncio.Queue()
 
-            if reply is None:
-                await websocket.send_text(
-                    StreamChunk(type="error", content="LLM 调用失败").model_dump_json()
+            def emit_token(token: str) -> None:
+                loop.call_soon_threadsafe(queue.put_nowait, {"type": "token", "content": token})
+
+            def worker() -> None:
+                reply = service.handle_turn_stream(message, on_token=emit_token)
+                if reply is None:
+                    loop.call_soon_threadsafe(
+                        queue.put_nowait,
+                        {"type": "error", "content": "LLM 调用失败"},
+                    )
+                    return
+
+                last_log = service.last_log_entry or {}
+                loop.call_soon_threadsafe(
+                    queue.put_nowait,
+                    {
+                        "type": "done",
+                        "content": reply,
+                        "mood": service.character_state.mood,
+                        "flagged": last_log.get("flagged", False),
+                    },
                 )
-                continue
 
-            last_log = service.last_log_entry or {}
-            await websocket.send_text(
-                StreamChunk(
-                    type="done",
-                    content=reply,
-                    mood=service.character_state.mood,
-                    flagged=last_log.get("flagged", False),
-                ).model_dump_json()
-            )
+            worker_task = asyncio.create_task(asyncio.to_thread(worker))
+
+            while True:
+                chunk = await queue.get()
+                await websocket.send_text(StreamChunk(**chunk).model_dump_json())
+                if chunk["type"] in {"done", "error"}:
+                    break
+
+            await worker_task
 
     except WebSocketDisconnect:
         pass

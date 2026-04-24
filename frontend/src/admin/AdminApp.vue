@@ -223,7 +223,7 @@ onMounted(async () => {
   })
   passthroughLocked.value = localStorage.getItem(PASSTHROUGH_KEY) === '1'
   darkTheme.value = localStorage.getItem(THEME_KEY) === 'dark'
-  alwaysOnTop.value = localStorage.getItem(MAIN_ALWAYS_ON_TOP_KEY) === '1'
+  alwaysOnTop.value = localStorage.getItem(MAIN_ALWAYS_ON_TOP_KEY) !== '0'
 
   // Apply theme to html/body immediately to prevent white flash on load
   const bg = darkTheme.value ? '#181825' : '#f5f5f5'

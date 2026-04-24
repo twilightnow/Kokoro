@@ -30,6 +30,20 @@ def _check_forbidden(reply: str, forbidden_words: list) -> bool:
     return any(word in reply for word in forbidden_words)
 
 
+class _UnavailableLLM:
+    provider = ""
+    model = ""
+
+    def __init__(self, message: str) -> None:
+        self.message = message
+
+    def chat(self, system_prompt: str, messages: list[dict[str, str]]) -> LLMResult:
+        raise RuntimeError(self.message)
+
+    def stream_chat(self, system_prompt: str, messages: list[dict[str, str]]):
+        raise RuntimeError(self.message)
+
+
 class ConversationService:
     """对话主循环编排：连接 CLI/UI 与人格、记忆、能力、日志各层。
 
@@ -55,8 +69,8 @@ class ConversationService:
         try:
             self._llm = create_llm_client()
         except EnvironmentError as e:
-            print(f"错误: {e}", file=sys.stderr)
-            sys.exit(1)
+            print(f"[警告] LLM 未配置，聊天功能暂不可用: {e}", file=sys.stderr)
+            self._llm = _UnavailableLLM(str(e))
         self._turn = 0
         self._last_log_entry: Optional[dict] = None
         self._last_memory_ctx: MemoryContext = MemoryContext()

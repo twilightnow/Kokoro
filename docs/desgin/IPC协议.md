@@ -1,132 +1,120 @@
 # Kokoro Sidecar IPC 协议
 
-这份文档只记录当前代码真实存在的协议。
+IPC 层负责连接 Tauri/Vue 前端和 Python sidecar。它只定义协议和数据形状，不承载人格、记忆、关系或主动调度的业务逻辑。
 
 ## 基本信息
 
 - sidecar：FastAPI
 - 默认地址：`127.0.0.1`
 - 默认端口：`18765`
-- 启动命令：`python -m src.api.server`
+- 通信方式：HTTP + WebSocket
 
-当前项目里，sidecar 需要单独启动，Tauri 还没有自动拉起它。
+## 设计原则
 
-## CORS
+- 路由层只做协议转换
+- 核心业务下沉到 application service
+- 前端不直接读取本地角色文件或记忆文件
+- API key 不通过 IPC 明文返回
+- 长连接只推送前端需要的状态变化
+- 所有 destructive 操作需要明确 API 语义
 
-当前允许的来源：
+## HTTP 接口类别
 
-- `tauri://localhost`
-- `http://localhost:1420`
-- `http://127.0.0.1:1420`
-- `http://localhost:5173`
-- `http://127.0.0.1:5173`
+### Chat
 
-## HTTP 接口
+用于单轮对话。
 
-### `POST /chat`
+核心接口：
 
-请求：
+- `POST /chat`
 
-```json
-{
-  "message": "你好"
-}
-```
+请求包含用户消息。响应包含角色回复、当前情绪、轮次、flagged 状态和 usage。
 
-响应：
+设计约束：
 
-```json
-{
-  "reply": "……笨蛋，你终于开口了啊。",
-  "mood": "normal",
-  "mood_changed": false,
-  "flagged": false,
-  "turn": 1,
-  "usage": {
-    "input_tokens": 100,
-    "output_tokens": 30,
-    "provider": "openai",
-    "model": "gpt-4o-mini"
-  }
-}
-```
+- 路由不拼 prompt
+- 路由不直接写记忆
+- LLM 失败返回可解释错误
 
-说明：
+### State
 
-- `message` 长度限制为 `1-2000`
-- `usage` 在 CLI 类 provider 下可能为 `null`
-- LLM 失败时返回 `503`
+用于主窗口同步当前状态。
 
-### `GET /state`
+核心接口：
 
-响应：
+- `GET /state`
+- `GET /health`
 
-```json
-{
-  "character_id": "asuka",
-  "character_name": "惣流·明日香·兰格雷",
-  "display": {
-    "mode": "model3d"
-  },
-  "mood": "normal",
-  "persist_count": 0,
-  "turn": 3,
-  "memory_summary_count": 1,
-  "memory_fact_count": 2,
-  "session_token_total": {
-    "input": 120,
-    "output": 56
-  }
-}
-```
+状态应保持轻量，适合频繁轮询或窗口聚焦时同步。
 
-说明：
+可包含：
 
-- `display` 是当前角色的展示配置，前端据此决定渲染 placeholder / Live2D / 3D
-- `memory_summary_count` 和 `memory_fact_count` 是当前最近一次记忆上下文的注入数量
-- 不是全量历史统计
+- 当前角色
+- display 配置
+- 当前情绪
+- 会话轮次
+- 记忆注入数量摘要
+- token 用量
+- TTS / provider / sidecar 健康状态
 
-### `GET /health`
+不应包含：
 
-响应：
+- 完整记忆
+- 完整关系历史
+- API key
+- 未脱敏感知原文
 
-```json
-{
-  "status": "ok",
-  "character": "惣流·明日香·兰格雷",
-  "version": "1.0.0"
-}
-```
+### Character
 
-### `POST /switch-character?name=<id>`
+用于角色切换和资源访问。
 
-示例：
+核心接口：
 
-```text
-POST /switch-character?name=rei
-```
+- `POST /switch-character`
+- `GET /character-assets/{character_id}/{asset_path}`
 
-响应：
+设计约束：
 
-```json
-{
-  "character_id": "rei",
-  "character_name": "绫波丽",
-  "display": {
-    "mode": "live2d"
-  },
-  "status": "ok"
-}
-```
+- 角色切换由后端完成会话收尾
+- 资源路径必须防止 path traversal
+- 前端只使用 URL，不拼本地绝对路径
 
-说明：
+### TTS
 
-- 参数 `name` 是 `characters/<name>/personality.yaml` 中的目录名
-- 切换时会先执行旧会话收尾，再重建新的 `ConversationService`
+用于语音合成。
 
-## WebSocket 接口
+核心接口：
 
-### `GET ws://127.0.0.1:18765/stream`
+- `POST /tts`
+
+设计约束：
+
+- TTS 失败不影响文字回复
+- 请求文本长度受限
+- voice / rate / volume 可由设置或角色默认值决定
+
+### Admin
+
+用于管理界面。
+
+接口前缀：
+
+- `/admin/*`
+
+设计约束：
+
+- 只面向本地管理
+- 敏感值不回显
+- destructive 操作需要明确确认
+- 导出默认脱敏
+
+## WebSocket 协议
+
+核心接口：
+
+- `GET /stream`
+
+当前主要用于流式对话。
 
 客户端发送：
 
@@ -134,64 +122,84 @@ POST /switch-character?name=rei
 { "message": "你好" }
 ```
 
-服务端当前会发这几类帧：
+服务端帧类型：
 
-```json
-{ "type": "thinking", "content": "" }
-```
+- `thinking`：开始处理
+- `token`：增量文本
+- `done`：本轮完成
+- `error`：本轮失败
 
-```json
-{ "type": "token", "content": "角色回复增量文本" }
-```
+后续可扩展帧类型：
 
-```json
-{
-  "type": "done",
-  "content": "角色回复文本",
-  "mood": "happy",
-  "flagged": false
-}
-```
+- `state`：轻量状态变化
+- `display`：表现层事件
+- `proactive`：主动行为消息
+- `reminder`：提醒事件
+- `safety`：安全降级提示
 
-```json
-{ "type": "error", "content": "LLM 调用失败" }
-```
+设计要求：
 
-补充说明：
+- 新帧必须向后兼容
+- 未识别帧前端应忽略或记录
+- 帧内容不应包含敏感原文
+- 主动类帧必须来自运行时调度，不由感知触发器直接推送
 
-- 前端类型里有 `proactive`，但当前 sidecar 不会发送这个帧
-- 当前真实可依赖的是 `thinking`、`token`、`done`、`error`
+## Display 配置
 
-### `POST /tts`
+`display` 是前端选择 renderer 的依据。
 
-请求：
+可支持：
 
-```json
-{
-  "text": "你好，这是语音播放测试。",
-  "voice": "zh-CN-XiaoxiaoNeural",
-  "rate": "+0%",
-  "volume": "+0%"
-}
-```
+- `placeholder`
+- `live2d`
+- `model3d`
 
-响应：
+设计原则：
 
-- `200 audio/mpeg`
-- 响应体为 mp3 二进制音频
+- display 配置由后端根据角色 manifest 构建
+- 前端只消费解析后的 URL 和参数
+- display 失败可回退
 
-说明：
+## 未来状态接口
 
-- `text` 长度限制为 `1-400`
-- `voice`、`rate`、`volume` 都是可选参数；不传时走环境变量或默认值
-- 当前实现为句段级调用，适合前端收到 token 后分段合成并连续播放
+长期伴侣运行时会引入更多状态，但不应把所有状态塞进 `/state`。
+
+建议拆分：
+
+- `/relationship`：关系状态摘要和配置
+- `/memories`：记忆治理
+- `/reminders`：提醒和承诺
+- `/privacy`：感知和隐私设置
+- `/safety`：安全边界设置和审计摘要
+- `/runtime`：主动调度和生活循环状态
+
+`/state` 保持主窗口轻量同步接口。
+
+## 错误模型
+
+建议错误响应包含：
+
+- `code`
+- `message`
+- `recoverable`
+- `detail`（可选，脱敏）
+
+常见错误：
+
+- `llm_unavailable`
+- `tts_unavailable`
+- `character_not_found`
+- `asset_not_found`
+- `invalid_config`
+- `permission_denied`
+- `unsafe_request`
 
 ## 模块边界
 
-为了保持简单，当前 IPC 层只负责协议，不负责业务决策：
+- API 层不写人格逻辑
+- API 层不操作底层记忆文件
+- API 层不直接修改关系数值
+- API 层不绕过安全策略
+- 所有真实业务处理下沉到 service
 
-- 路由层不直接写人格逻辑
-- 路由层不操作记忆文件
-- 所有真实对话处理都下沉到 `ConversationService`
-
-如果后续加新接口，优先保持这一条，不要把 sidecar 路由写成第二套业务层。
+这条边界比具体 URL 更重要。后续加接口时优先保持服务边界清晰。

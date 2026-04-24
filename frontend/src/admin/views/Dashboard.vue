@@ -55,11 +55,46 @@
         <div class="card">
           <div class="card-title">Sidecar 状态</div>
           <div class="stat-value">
-            <span :class="health?.status === 'ok' ? 'text-green' : 'text-red'">
-              {{ health?.status === 'ok' ? '✅ 运行中' : '❌ 离线' }}
+            <span :class="health?.sidecar?.status === 'ok' ? 'text-green' : 'text-red'">
+              {{ health?.sidecar?.status === 'ok' ? '运行中' : '离线' }}
             </span>
           </div>
           <div class="stat-sub">Port: 18765</div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">LLM Provider</div>
+          <div class="stat-value">
+            <span :class="health?.llm?.configured ? 'text-green' : 'text-red'">
+              {{ health?.llm?.provider || '未配置' }}
+            </span>
+          </div>
+          <div class="stat-sub">{{ health?.llm?.model || '需要在设置页配置' }}</div>
+          <button class="btn btn-secondary btn-sm mt-4" @click="$router.push('/settings')">
+            打开设置
+          </button>
+        </div>
+
+        <div class="card">
+          <div class="card-title">角色资源</div>
+          <div class="stat-value">
+            <span :class="health?.character_resources?.configured ? 'text-green' : 'text-warn'">
+              {{ health?.character_resources?.display_mode || 'placeholder' }}
+            </span>
+          </div>
+          <div class="stat-sub">
+            {{ health?.character_resources?.status === 'fallback' ? '使用占位降级' : '资源可用' }}
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">TTS</div>
+          <div class="stat-value">
+            <span :class="health?.tts?.configured ? 'text-green' : 'text-red'">
+              {{ health?.tts?.provider || 'edge-tts' }}
+            </span>
+          </div>
+          <div class="stat-sub">{{ health?.tts?.voice || health?.tts?.message || '未启用' }}</div>
         </div>
       </div>
     </template>
@@ -180,4 +215,5 @@ onUnmounted(() => {
 
 .text-green { color: #15803d; }
 .text-red { color: #b91c1c; }
+.text-warn { color: #a16207; }
 </style>

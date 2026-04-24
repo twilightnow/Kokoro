@@ -117,7 +117,7 @@ pub fn show_or_create_admin_window<R: Runtime>(app: &AppHandle<R>) -> Result<(),
         "admin-new-window-build-start",
         "building a new admin window",
     );
-    let window = WebviewWindowBuilder::new(app, "admin", admin_window_url()?)
+    let mut builder = WebviewWindowBuilder::new(app, "admin", admin_window_url()?)
         .title("Kokoro Admin")
         .inner_size(1100.0, 760.0)
         .min_inner_size(900.0, 620.0)
@@ -127,7 +127,13 @@ pub fn show_or_create_admin_window<R: Runtime>(app: &AppHandle<R>) -> Result<(),
         .closable(true)
         .decorations(true)
         .transparent(false)
-        .background_color(Color(245, 245, 245, 255))
+        .background_color(Color(245, 245, 245, 255));
+
+    if let Some(icon) = app.default_window_icon().cloned() {
+        builder = builder.icon(icon).map_err(|e| e.to_string())?;
+    }
+
+    let window = builder
         // NOTICE:
         // visible(false) で非表示のまま作成し、center/focus 後に show() する。
         // visible(true) のままだとコンテンツが読み込まれる前に白い状態のウィンドウが

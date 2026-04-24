@@ -3,6 +3,7 @@
 
 mod commands;
 mod diagnostics;
+mod sidecar;
 mod tray;
 
 fn main() {
@@ -22,6 +23,14 @@ fn main() {
             }
         })
         .setup(|app| {
+            if let Err(error) = sidecar::ensure_sidecar_started() {
+                diagnostics::report_client_log(
+                    "tauri-sidecar",
+                    "sidecar-start-failed",
+                    "error",
+                    &error,
+                );
+            }
             tray::setup_tray(app.handle())?;
             Ok(())
         })
@@ -35,7 +44,13 @@ fn main() {
             commands::open_admin_window,
             commands::close_admin_window,
             commands::set_admin_always_on_top,
+            commands::set_start_on_boot,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app, event| {
+            if let tauri::RunEvent::Exit = event {
+                sidecar::shutdown_sidecar();
+            }
+        });
 }

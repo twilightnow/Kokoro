@@ -1,4 +1,5 @@
 import json
+import sys
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -6,7 +7,16 @@ from urllib.parse import quote
 import yaml
 
 
-_CHARACTERS_DIR = Path("characters")
+def _default_characters_dir() -> Path:
+    bundled_root = getattr(sys, "_MEIPASS", None)
+    if bundled_root:
+        candidate = Path(bundled_root) / "characters"
+        if candidate.exists():
+            return candidate
+    return Path("characters")
+
+
+_CHARACTERS_DIR = _default_characters_dir()
 
 
 def _characters_root() -> Path:
@@ -111,7 +121,6 @@ def _build_live2d_display(character_id: str, base_url: str, display: dict[str, A
             "offset_x": float(live2d.get("offset_x", 0)),
             "offset_y": float(live2d.get("offset_y", 0)),
             "idle_group": str(live2d.get("idle_group", "Idle")),
-            "tap_body_group": str(live2d.get("tap_body_group", "Tap@Body")),
             "mood_motions": {
                 str(key): str(value)
                 for key, value in (live2d.get("mood_motions", {}) or {}).items()

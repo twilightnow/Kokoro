@@ -30,6 +30,7 @@ LLM provider abstraction.
 import os
 import shutil
 import subprocess
+import sys
 from abc import ABC, abstractmethod
 from collections.abc import Generator
 from dataclasses import dataclass, field
@@ -41,7 +42,10 @@ from dotenv import load_dotenv
 from openai import AuthenticationError as OpenAIAuthenticationError
 from openai import OpenAI
 
-_ENV_PATH = Path(__file__).resolve().parents[2] / ".env"
+if getattr(sys, "frozen", False):
+    _ENV_PATH = Path(sys.executable).resolve().parent / ".env"
+else:
+    _ENV_PATH = Path(__file__).resolve().parents[2] / ".env"
 load_dotenv(dotenv_path=_ENV_PATH)
 
 

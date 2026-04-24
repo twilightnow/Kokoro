@@ -6,7 +6,6 @@ export interface Live2DDisplayConfig {
   offset_x: number
   offset_y: number
   idle_group: string
-  tap_body_group: string
   mood_motions: Record<string, string>
 }
 

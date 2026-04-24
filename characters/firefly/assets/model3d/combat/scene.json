@@ -38,11 +38,11 @@
     }
   },
   "camera": {
-    "distance": 30,
-    "fov": 36,
+    "distance": 32,
+    "fov": 38,
     "target": {
       "x": 0,
-      "y": 9,
+      "y": 8,
       "z": 0
     }
   },

@@ -41,18 +41,57 @@
 
         <div v-if="isApiKeyProvider" class="form-group">
           <label class="form-label">API Key</label>
-          <div style="display:flex; gap:8px">
-            <input
-              :type="showApiKey ? 'text' : 'password'"
-              v-model="updates[apiKeyEnvName]"
-              :placeholder="apiKeyIsSet ? '（已配置，留空不修改）' : '输入 API Key'"
-              style="flex:1"
-            />
-            <button class="btn btn-secondary btn-sm" @click="showApiKey = !showApiKey">
-              {{ showApiKey ? '隐藏' : '显示' }}
-            </button>
+          <input
+            type="password"
+            v-model="updates[apiKeyEnvName]"
+            :placeholder="apiKeyIsSet ? '已配置，留空不修改' : '输入 API Key'"
+            autocomplete="new-password"
+          />
+          <div class="hint">出于安全考虑，这里只允许替换或清空，不显示已保存的明文 key。</div>
+          <button class="btn btn-secondary btn-sm mt-4" :disabled="saving" @click="testLlm">
+            测试连接
+          </button>
+        </div>
+      </div>
+
+      <div class="card mt-4">
+        <div class="card-title">TTS 语音</div>
+        <div class="form-group inline-check">
+          <label>
+            <input type="checkbox" v-model="ttsEnabled" />
+            启用语音输出
+          </label>
+        </div>
+        <div class="form-group">
+          <label class="form-label">供应商 (TTS_PROVIDER)</label>
+          <select v-model="updates.TTS_PROVIDER">
+            <option value="edge-tts">edge-tts</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">声线 (TTS_VOICE)</label>
+          <input type="text" v-model="updates.TTS_VOICE" placeholder="zh-CN-XiaoxiaoNeural" />
+        </div>
+        <div class="grid-2">
+          <div class="form-group">
+            <label class="form-label">语速 (TTS_RATE)</label>
+            <input type="text" v-model="updates.TTS_RATE" placeholder="+0%" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">音量 (TTS_VOLUME)</label>
+            <input type="text" v-model="updates.TTS_VOLUME" placeholder="+0%" />
           </div>
         </div>
+      </div>
+
+      <div class="card mt-4">
+        <div class="card-title">桌面行为</div>
+        <div class="settings-list">
+          <label><input type="checkbox" v-model="startOnBoot" /> 开机启动</label>
+          <label><input type="checkbox" v-model="mainAlwaysOnTop" /> 主窗口默认置顶</label>
+          <label><input type="checkbox" v-model="enablePerception" /> 启用感知能力</label>
+        </div>
+        <div class="hint">感知默认关闭；开机启动会写入当前 Windows 用户的启动项。</div>
       </div>
 
       <!-- 记忆配置 -->
@@ -79,6 +118,9 @@
         <button class="btn btn-secondary" :disabled="saving" @click="saveAndReload">
           保存并热更新
         </button>
+        <button class="btn btn-secondary" :disabled="saving" @click="exportDiagnostics">
+          导出诊断
+        </button>
       </div>
 
       <div v-if="restartRequired" class="banner-warn mt-4">
@@ -104,15 +146,25 @@ const loadingConfig = ref(false)
 const error = ref('')
 const saving = ref(false)
 const restartRequired = ref(false)
-const showApiKey = ref(false)
+const ttsEnabled = ref(true)
+const startOnBoot = ref(false)
+const mainAlwaysOnTop = ref(true)
+const enablePerception = ref(false)
 
 // 可编辑的配置键
 const updates = ref<Record<string, string>>({
   LLM_PROVIDER: '',
   LLM_MODEL: '',
   LLM_MAX_TOKENS: '300',
+  TTS_PROVIDER: 'edge-tts',
+  TTS_VOICE: 'zh-CN-XiaoxiaoNeural',
+  TTS_RATE: '+0%',
+  TTS_VOLUME: '+0%',
   MEMORY_TOKEN_BUDGET: '500',
   KOKORO_DATA_DIR: './data',
+  KOKORO_START_ON_BOOT: '0',
+  KOKORO_ALWAYS_ON_TOP: '1',
+  KOKORO_ENABLE_PERCEPTION: '0',
   ANTHROPIC_API_KEY: '',
   OPENAI_API_KEY: '',
   GEMINI_API_KEY: '',
@@ -149,6 +201,10 @@ async function loadConfig() {
         updates.value[entry.key] = entry.value
       }
     }
+    startOnBoot.value = updates.value.KOKORO_START_ON_BOOT === '1'
+    mainAlwaysOnTop.value = updates.value.KOKORO_ALWAYS_ON_TOP !== '0'
+    enablePerception.value = updates.value.KOKORO_ENABLE_PERCEPTION === '1'
+    ttsEnabled.value = updates.value.TTS_PROVIDER !== 'disabled'
   } catch (e: any) {
     error.value = e.message
   } finally {
@@ -157,6 +213,10 @@ async function loadConfig() {
 }
 
 function buildPayload(): Record<string, string> {
+  updates.value.KOKORO_START_ON_BOOT = startOnBoot.value ? '1' : '0'
+  updates.value.KOKORO_ALWAYS_ON_TOP = mainAlwaysOnTop.value ? '1' : '0'
+  updates.value.KOKORO_ENABLE_PERCEPTION = enablePerception.value ? '1' : '0'
+  updates.value.TTS_PROVIDER = ttsEnabled.value ? 'edge-tts' : 'disabled'
   const payload: Record<string, string> = {}
   for (const [k, v] of Object.entries(updates.value)) {
     if (v !== '') payload[k] = v
@@ -175,6 +235,7 @@ async function saveConfig() {
   restartRequired.value = false
   try {
     const r = await api.updateConfig(buildPayload())
+    applyDesktopPreferences()
     restartRequired.value = r.restart_required
     showToast('配置已保存', 'success')
   } catch (e: any) {
@@ -188,6 +249,7 @@ async function saveAndReload() {
   saving.value = true
   try {
     const r = await api.updateConfig(buildPayload())
+    applyDesktopPreferences()
     restartRequired.value = r.restart_required
     await api.reloadConfig()
     showToast('配置已保存并热更新', 'success')
@@ -198,5 +260,61 @@ async function saveAndReload() {
   }
 }
 
+function applyDesktopPreferences() {
+  localStorage.setItem('kokoro-main-always-on-top', mainAlwaysOnTop.value ? '1' : '0')
+  localStorage.setItem('kokoro-tts-enabled', ttsEnabled.value ? '1' : '0')
+  import('@tauri-apps/api/core')
+    .then(({ invoke }) => invoke('set_start_on_boot', { enabled: startOnBoot.value }))
+    .catch(() => {
+      showToast('开机启动设置未写入系统启动项', 'error')
+    })
+}
+
+async function testLlm() {
+  saving.value = true
+  try {
+    await api.updateConfig(buildPayload())
+    const r = await api.testLlmConfig()
+    showToast(`连接配置可用: ${r.provider} / ${r.model}`, 'success')
+  } catch (e: any) {
+    showToast(`连接测试失败: ${e.message}`, 'error')
+  } finally {
+    saving.value = false
+  }
+}
+
+async function exportDiagnostics() {
+  try {
+    const data = await api.exportDiagnostics()
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `kokoro-diagnostics-${new Date().toISOString().replace(/[:.]/g, '-')}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+  } catch (e: any) {
+    showToast(`导出失败: ${e.message}`, 'error')
+  }
+}
+
 onMounted(loadConfig)
 </script>
+
+<style scoped>
+.hint {
+  color: #6b7280;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.settings-list {
+  display: grid;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.inline-check {
+  display: block;
+}
+</style>

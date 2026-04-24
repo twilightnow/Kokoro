@@ -11,7 +11,8 @@ POST /admin/debug/client-log    前端/桌面端诊断日志，打印到 sidecar
 import json
 import sys
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from collections import deque
+from typing import Any, Deque, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -23,6 +24,7 @@ router = APIRouter(prefix="/debug")
 
 # 临时注入的事实（仅内存，会话级别）
 _temp_facts: Dict[str, str] = {}
+_client_log_buffer: Deque[Dict[str, Any]] = deque(maxlen=200)
 
 
 class DebugStateResponse(BaseModel):
@@ -146,12 +148,19 @@ async def client_log(body: ClientLogRequest) -> Dict[str, str]:
         "message": body.message,
         "details": body.details or {},
     }
+    _client_log_buffer.append(payload)
     print(
         f"[KokoroClientLog][{level}] {json.dumps(payload, ensure_ascii=False)}",
         file=sys.stderr,
         flush=True,
     )
     return {"status": "ok"}
+
+
+def get_client_log_snapshot(limit: int = 50) -> List[Dict[str, Any]]:
+    if limit <= 0:
+        return []
+    return list(_client_log_buffer)[-limit:]
 
 
 @router.post("/sandbox", response_model=SandboxResponse)

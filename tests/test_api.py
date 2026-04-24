@@ -39,6 +39,38 @@ def _make_mock_llm():
     return mock_llm
 
 
+class TestSidecarServerStartup(unittest.TestCase):
+
+    def test_existing_sidecar_health_is_detected(self):
+        from src.api.server import _get_existing_sidecar_health
+
+        response = MagicMock()
+        response.status = 200
+        response.read.return_value = b'{"status":"ok","character_id":"firefly","character":"Firefly"}'
+        response.__enter__.return_value = response
+        response.__exit__.return_value = None
+
+        with patch("src.api.server.urlopen", return_value=response):
+            health = _get_existing_sidecar_health("127.0.0.1", 18765)
+
+        self.assertIsNotNone(health)
+        self.assertEqual(health["character_id"], "firefly")
+
+    def test_non_kokoro_health_is_ignored(self):
+        from src.api.server import _get_existing_sidecar_health
+
+        response = MagicMock()
+        response.status = 200
+        response.read.return_value = b'{"status":"ok"}'
+        response.__enter__.return_value = response
+        response.__exit__.return_value = None
+
+        with patch("src.api.server.urlopen", return_value=response):
+            health = _get_existing_sidecar_health("127.0.0.1", 18765)
+
+        self.assertIsNone(health)
+
+
 @unittest.skipUnless(_HAS_FASTAPI, "fastapi/httpx 未安装，跳过 API 测试")
 class TestHealthEndpoint(unittest.TestCase):
 

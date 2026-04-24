@@ -81,7 +81,7 @@ function fitModel(): void {
   app.renderer.resize(width, height)
 
   const usableWidth = width * 0.98
-  const usableHeight = height * 0.98
+  const usableHeight = height * 0.94
   const baseScale = Math.min(
     usableWidth / naturalBounds.width,
     usableHeight / naturalBounds.height,
@@ -95,7 +95,7 @@ function fitModel(): void {
   )
   model.position.set(
     width / 2 + props.config.offset_x,
-    height / 2 + props.config.offset_y + height * 0.04,
+    height / 2 + props.config.offset_y - height * 0.02,
   )
 }
 
@@ -153,15 +153,8 @@ async function mountModel(): Promise<void> {
     model = null
   }
 
-  model = await live2dModule!.Live2DModel.from(props.config.model_url, { autoInteract: true })
+  model = await live2dModule!.Live2DModel.from(props.config.model_url, { autoInteract: false })
   measureModelBounds()
-
-  model.on('hit', (hitAreas: string[]) => {
-    const hasBody = hitAreas.some((area) => area.toLowerCase() === 'body')
-    if (hasBody) {
-      void playMotion(props.config.tap_body_group)
-    }
-  })
 
   app.stage.addChild(model)
   fitModel()
@@ -248,7 +241,7 @@ onBeforeUnmount(() => {
   height: 100%;
   flex: 1;
   min-height: 0;
-  cursor: pointer;
+  cursor: default;
   position: relative;
 }
 
@@ -274,5 +267,6 @@ onBeforeUnmount(() => {
   width: 100%;
   height: 100%;
   display: block;
+  pointer-events: none;
 }
 </style>

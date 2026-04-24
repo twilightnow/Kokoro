@@ -7,6 +7,7 @@ POST /admin/config/reload
 """
 
 import os
+import sys
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -19,7 +20,11 @@ from ....capability.llm import create_llm_client
 
 router = APIRouter(prefix="/config")
 
-_ENV_PATH = Path(".env")
+if getattr(sys, "frozen", False):
+    _ROOT = Path(sys.executable).resolve().parent
+else:
+    _ROOT = Path(__file__).resolve().parents[4]
+_ENV_PATH = _ROOT / ".env"
 _SENSITIVE_KEYS = {
     "ANTHROPIC_API_KEY",
     "OPENAI_API_KEY",
@@ -27,10 +32,28 @@ _SENSITIVE_KEYS = {
     "DEEPSEEK_API_KEY",
     "OPENROUTER_API_KEY",
     "LLM_API_KEY",
+    "GITHUB_TOKEN",
+    "GH_TOKEN",
+    "COPILOT_GITHUB_TOKEN",
 }
 _RESTART_REQUIRED_KEYS = {
     "KOKORO_DATA_DIR",
     "KOKORO_DEFAULT_CHARACTER",
+}
+_KNOWN_DEFAULTS = {
+    "LLM_PROVIDER": "",
+    "LLM_MODEL": "",
+    "LLM_MAX_TOKENS": "300",
+    "TTS_PROVIDER": "edge-tts",
+    "TTS_VOICE": "zh-CN-XiaoxiaoNeural",
+    "TTS_RATE": "+0%",
+    "TTS_VOLUME": "+0%",
+    "KOKORO_DEFAULT_CHARACTER": "",
+    "KOKORO_DATA_DIR": "./data",
+    "MEMORY_TOKEN_BUDGET": "500",
+    "KOKORO_START_ON_BOOT": "0",
+    "KOKORO_ALWAYS_ON_TOP": "1",
+    "KOKORO_ENABLE_PERCEPTION": "0",
 }
 
 
@@ -94,7 +117,9 @@ def _write_env_file(updates: Dict[str, str]) -> None:
 async def get_config() -> ConfigResponse:
     env_data = _read_env_file()
     entries: List[ConfigEntry] = []
-    for key, value in env_data.items():
+    merged_keys = list(dict.fromkeys([*env_data.keys(), *_KNOWN_DEFAULTS.keys()]))
+    for key in merged_keys:
+        value = env_data.get(key, _KNOWN_DEFAULTS.get(key, ""))
         if key in _SENSITIVE_KEYS:
             entries.append(
                 ConfigEntry(key=key, value="", is_sensitive=True, is_set=bool(value))
@@ -123,7 +148,7 @@ async def reload_config(
 ) -> Dict[str, Any]:
     from dotenv import load_dotenv
 
-    load_dotenv(override=True)
+    load_dotenv(dotenv_path=_ENV_PATH, override=True)
 
     applied: List[str] = []
 
@@ -159,3 +184,17 @@ async def reload_config(
             pass
 
     return {"status": "ok", "applied": applied}
+
+
+@router.post("/test-llm", status_code=200)
+async def test_llm_config() -> Dict[str, Any]:
+    try:
+        client = create_llm_client()
+    except EnvironmentError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    return {
+        "status": "ok",
+        "provider": getattr(client, "provider", ""),
+        "model": getattr(client, "model", ""),
+    }

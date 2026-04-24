@@ -118,4 +118,6 @@ export const api = {
       body: JSON.stringify({ updates }),
     }),
   reloadConfig: () => request<any>('/admin/config/reload', { method: 'POST' }),
+  testLlmConfig: () => request<any>('/admin/config/test-llm', { method: 'POST' }),
+  exportDiagnostics: () => request<any>('/admin/diagnostics/export'),
 }

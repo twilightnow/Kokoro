@@ -157,7 +157,7 @@ async function init(): Promise<void> {
   const ok = await checkHealth()
   if (!ok) {
     status.value = 'error'
-    errorMessage.value = '请先启动 sidecar（python -m src.api.server）'
+    errorMessage.value = 'sidecar 正在启动或不可用，请稍后重试'
     return
   }
   await fetchCharacterInfo()

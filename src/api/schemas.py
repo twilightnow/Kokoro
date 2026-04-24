@@ -29,7 +29,6 @@ class Live2DDisplayConfig(BaseModel):
     offset_x: float = 0.0
     offset_y: float = 0.0
     idle_group: str = "Idle"
-    tap_body_group: str = "Tap@Body"
     mood_motions: Dict[str, str] = Field(default_factory=dict)
 
 
@@ -120,6 +119,10 @@ class HealthResponse(BaseModel):
     character_id: str
     character: str
     version: str = ""
+    sidecar: Dict[str, str] = Field(default_factory=dict)
+    llm: Dict[str, str | bool] = Field(default_factory=dict)
+    character_resources: Dict[str, str | bool] = Field(default_factory=dict)
+    tts: Dict[str, str | bool] = Field(default_factory=dict)
 
 
 class SwitchCharacterResponse(BaseModel):

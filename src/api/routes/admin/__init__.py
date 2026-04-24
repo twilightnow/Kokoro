@@ -6,7 +6,7 @@ Admin API 路由包。
 """
 from fastapi import APIRouter
 
-from . import characters, memories, logs, stats, debug, config_mgr
+from . import characters, config_mgr, debug, diagnostics, logs, memories, stats
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -16,3 +16,4 @@ router.include_router(logs.router)
 router.include_router(stats.router)
 router.include_router(debug.router)
 router.include_router(config_mgr.router)
+router.include_router(diagnostics.router)

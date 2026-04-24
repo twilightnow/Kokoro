@@ -2,7 +2,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
 
 from ...application.conversation_service import ConversationService
-from ..character_assets import build_character_display, resolve_character_asset
+from ...capability.tts import create_tts_client
+from ..character_assets import build_character_display, load_manifest, resolve_character_asset
 from ..service_registry import get_service, switch_character
 from ..schemas import HealthResponse, SessionTokenTotal, StateResponse, SwitchCharacterResponse
 
@@ -37,11 +38,53 @@ async def get_state(
 async def health(
     service: ConversationService = Depends(get_service),
 ) -> HealthResponse:
+    llm = getattr(service, "_llm", None)
+    llm_provider = str(getattr(llm, "provider", "") or "")
+    llm_model = str(getattr(llm, "model", "") or "")
+
+    manifest = load_manifest(service.character_id)
+    display = manifest.get("display", {}) if isinstance(manifest, dict) else {}
+    display_mode = str(display.get("mode") or "placeholder")
+    resource_ready = display_mode in {"live2d", "model3d"}
+
+    try:
+        tts_client = create_tts_client()
+        tts_status = {
+            "status": "ok",
+            "provider": "edge-tts",
+            "voice": str(getattr(tts_client, "voice", "")),
+            "configured": True,
+        }
+    except Exception as exc:
+        tts_status = {
+            "status": "error",
+            "provider": "edge-tts",
+            "message": str(exc),
+            "configured": False,
+        }
+
     return HealthResponse(
         status="ok",
         character_id=service.character_id,
         character=service.character.name,
         version=service.character.version,
+        sidecar={
+            "status": "ok",
+            "api": "FastAPI",
+        },
+        llm={
+            "status": "ok" if llm_provider else "unconfigured",
+            "provider": llm_provider,
+            "model": llm_model,
+            "message": str(getattr(llm, "message", "") or ""),
+            "configured": bool(llm_provider),
+        },
+        character_resources={
+            "status": "ok" if resource_ready else "fallback",
+            "display_mode": display_mode,
+            "configured": resource_ready,
+        },
+        tts=tts_status,
     )
 
 

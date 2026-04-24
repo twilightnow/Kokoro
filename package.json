@@ -2,10 +2,12 @@
   "name": "kokoro",
   "private": true,
   "scripts": {
-    "frontend:dev": "chcp 65001>nul && npm run dev --prefix frontend",
+    "frontend:dev": "chcp 65001>nul && node scripts/start_frontend_dev.js",
     "tauri:dev": "chcp 65001>nul && cd src-tauri && npx @tauri-apps/cli dev",
     "dev": "chcp 65001>nul && concurrently -n vite,tauri -c cyan,green --kill-others-on-fail \"npm run frontend:dev\" \"npm run tauri:dev\"",
     "sidecar": "chcp 65001>nul && set PYTHONUTF8=1&& python -X utf8 -m src.api.server",
+    "sidecar:build": "chcp 65001>nul && powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build_sidecar.ps1",
+    "dev:kill": "chcp 65001>nul && powershell -NoProfile -ExecutionPolicy Bypass -File scripts/kill_dev_processes.ps1",
     "dev:all": "chcp 65001>nul && concurrently -n sidecar,vite,tauri -c yellow,cyan,green --kill-others-on-fail \"npm run sidecar\" \"npm run frontend:dev\" \"npm run tauri:dev\""
   },
   "devDependencies": {

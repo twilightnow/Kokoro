@@ -64,7 +64,8 @@ python main.py --replay data/logs/<file>.jsonl
 一键启动：
 
 ```bash
-npm run dev:all
+npm run dev
+npm run dev:kill  # 清理调试残留的 sidecar / Vite / Tauri 进程
 ```
 
 分开启动：
@@ -76,8 +77,10 @@ npm run dev       # Vite + Tauri
 
 说明：
 
-- 当前 sidecar 需要单独启动
+- Tauri 启动时会自动拉起 sidecar；开发时也可以用 `npm run sidecar` 单独调试后端
 - 桌面模式依赖 Node.js 18+、Rust、WebView2
+- 打包 Python sidecar：`npm run sidecar:build`，产物位于 `dist/kokoro-sidecar.exe`
+- 管理界面提供健康检查、基础设置和脱敏诊断导出
 
 ## 支持的 LLM Provider
 

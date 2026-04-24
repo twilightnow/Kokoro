@@ -132,10 +132,6 @@ function clearManualSkin(): void {
 
 <template>
   <div class="sprite-panel">
-    <div v-if="characterName" class="char-name" :style="{ color: currentMood.text }">
-      {{ characterName }}
-    </div>
-
     <Transition name="sprite" mode="out-in">
       <div :key="spriteKey" class="sprite-inner">
         <Live2DCanvas
@@ -180,10 +176,8 @@ function clearManualSkin(): void {
       </div>
     </Transition>
 
-    <div class="sprite-footer" :style="{ color: currentMood.text }">
+    <div v-if="activeSkinLabel" class="sprite-footer" :style="{ color: currentMood.text }">
       <span v-if="activeSkinLabel" class="skin-label">{{ activeSkinLabel }}</span>
-      <span v-if="turn !== undefined && turn > 0">第 {{ turn }} 轮</span>
-      <span v-else class="hint">点击开始对话</span>
     </div>
   </div>
 </template>
@@ -197,18 +191,8 @@ function clearManualSkin(): void {
   flex-direction: column;
   align-items: center;
   justify-content: space-between;
-  padding: 20px 8px 10px;
+  padding: 2px 8px 2px;
   -webkit-app-region: no-drag;
-}
-
-.char-name {
-  font-size: 13px;
-  font-family: 'Hiragino Kaku Gothic Pro', 'Meiryo', sans-serif;
-  font-weight: bold;
-  letter-spacing: 2px;
-  opacity: 0.85;
-  align-self: flex-start;
-  text-shadow: 0 2px 8px rgba(255, 255, 255, 0.72);
 }
 
 .sprite-inner {
@@ -246,10 +230,6 @@ function clearManualSkin(): void {
   display: flex;
   gap: 10px;
   align-items: center;
-}
-
-.hint {
-  opacity: 0.5;
 }
 
 .skin-switcher {

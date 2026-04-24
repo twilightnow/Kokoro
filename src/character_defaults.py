@@ -1,8 +1,18 @@
 import os
+import sys
 from pathlib import Path
 
 
-CHARACTERS_DIR = Path("characters")
+def _default_characters_dir() -> Path:
+    bundled_root = getattr(sys, "_MEIPASS", None)
+    if bundled_root:
+        candidate = Path(bundled_root) / "characters"
+        if candidate.exists():
+            return candidate
+    return Path("characters")
+
+
+CHARACTERS_DIR = _default_characters_dir()
 DEFAULT_CHARACTER_ENV = "KOKORO_DEFAULT_CHARACTER"
 
 

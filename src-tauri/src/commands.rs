@@ -147,3 +147,52 @@ pub fn set_admin_always_on_top<R: Runtime>(app: AppHandle<R>, enabled: bool) -> 
         .ok_or_else(|| "admin window not found".to_string())?;
     win.set_always_on_top(enabled).map_err(|e| e.to_string())
 }
+
+#[tauri::command]
+pub fn set_start_on_boot<R: Runtime>(app: AppHandle<R>, enabled: bool) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        let _ = app;
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let exe_arg = format!("\"{}\"", exe.display());
+        let status = if enabled {
+            std::process::Command::new("reg")
+                .args([
+                    "add",
+                    r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+                    "/v",
+                    "Kokoro",
+                    "/t",
+                    "REG_SZ",
+                    "/d",
+                    &exe_arg,
+                    "/f",
+                ])
+                .status()
+                .map_err(|e| e.to_string())?
+        } else {
+            std::process::Command::new("reg")
+                .args([
+                    "delete",
+                    r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+                    "/v",
+                    "Kokoro",
+                    "/f",
+                ])
+                .status()
+                .map_err(|e| e.to_string())?
+        };
+        if status.success() {
+            Ok(())
+        } else {
+            Err(format!("reg command exited with status {status}"))
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = app;
+        let _ = enabled;
+        Err("start on boot is only implemented on Windows".to_string())
+    }
+}

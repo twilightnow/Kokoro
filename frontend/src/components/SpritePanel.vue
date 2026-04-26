@@ -12,6 +12,13 @@ const props = defineProps<{
   display?: CharacterDisplayConfig
   turn?: number
   lipSyncLevel?: number
+  visualScale?: number
+  visualOffset?: { x: number; y: number }
+}>()
+
+const emit = defineEmits<{
+  (event: 'update:visual-scale', value: number): void
+  (event: 'update:visual-offset', value: { x: number; y: number }): void
 }>()
 
 type MoodVisual = { emoji: string; label: string; bg: string; border: string; text: string }
@@ -43,6 +50,10 @@ const currentMood = computed<MoodVisual>(() => {
 
 const live2dConfig = computed(() => (
   props.display?.mode === 'live2d' ? props.display.live2d : undefined
+))
+
+const imageConfig = computed(() => (
+  props.display?.mode === 'image' ? props.display.image : undefined
 ))
 
 const model3dConfig = computed(() => (
@@ -121,6 +132,58 @@ const spriteKey = computed(() => {
   return live2dConfig.value ? base : `${base}:${props.mood}`
 })
 
+const visualScaleValue = computed(() => props.visualScale ?? 1)
+const visualOffsetValue = computed(() => props.visualOffset ?? { x: 0, y: 0 })
+const visualTransform = computed(() => (
+  `translate(${visualOffsetValue.value.x}px, ${visualOffsetValue.value.y}px) scale(${visualScaleValue.value})`
+))
+const imageTransform = computed(() => {
+  const config = imageConfig.value
+  const offsetX = (config?.offset_x ?? 0) + visualOffsetValue.value.x
+  const offsetY = (config?.offset_y ?? 0) + visualOffsetValue.value.y
+  const scale = (config?.scale ?? 1) * visualScaleValue.value
+  return `translate(${offsetX}px, ${offsetY}px) scale(${scale})`
+})
+let dragging = false
+let dragStart = { x: 0, y: 0 }
+let offsetStart = { x: 0, y: 0 }
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value))
+}
+
+function onWheel(event: WheelEvent): void {
+  event.preventDefault()
+  const direction = event.deltaY > 0 ? -1 : 1
+  emit('update:visual-scale', clamp(visualScaleValue.value + direction * 0.05, 0.75, 1.45))
+}
+
+function onPointerDown(event: PointerEvent): void {
+  if (event.button !== 0) return
+  const target = event.currentTarget as HTMLElement
+  dragging = true
+  dragStart = { x: event.clientX, y: event.clientY }
+  offsetStart = { ...visualOffsetValue.value }
+  target.setPointerCapture(event.pointerId)
+}
+
+function onPointerMove(event: PointerEvent): void {
+  if (!dragging) return
+  emit('update:visual-offset', {
+    x: clamp(offsetStart.x + event.clientX - dragStart.x, -140, 140),
+    y: clamp(offsetStart.y + event.clientY - dragStart.y, -180, 180),
+  })
+}
+
+function onPointerUp(event: PointerEvent): void {
+  if (!dragging) return
+  dragging = false
+  const target = event.currentTarget as HTMLElement
+  if (target.hasPointerCapture(event.pointerId)) {
+    target.releasePointerCapture(event.pointerId)
+  }
+}
+
 function toggleSkin(skinId: string): void {
   manualSkinId.value = manualSkinId.value === skinId ? '' : skinId
 }
@@ -131,7 +194,14 @@ function clearManualSkin(): void {
 </script>
 
 <template>
-  <div class="sprite-panel">
+  <div
+    class="sprite-panel"
+    @wheel="onWheel"
+    @pointerdown="onPointerDown"
+    @pointermove="onPointerMove"
+    @pointerup="onPointerUp"
+    @pointercancel="onPointerUp"
+  >
     <Transition name="sprite" mode="out-in">
       <div :key="spriteKey" class="sprite-inner">
         <Live2DCanvas
@@ -139,15 +209,35 @@ function clearManualSkin(): void {
           :config="live2dConfig"
           :mood="mood"
           :lip-sync-level="lipSyncLevel ?? 0"
+          :visual-scale="visualScaleValue"
+          :visual-offset="visualOffsetValue"
         />
-        <Model3DCanvas
+        <div
           v-else-if="activeModel3dSkin"
-          :skin="activeModel3dSkin"
-          :mood="mood"
-          :lip-sync-level="lipSyncLevel ?? 0"
-        />
+          class="sprite-visual"
+          :style="{ transform: visualTransform }"
+        >
+          <Model3DCanvas
+            :skin="activeModel3dSkin"
+            :mood="mood"
+            :lip-sync-level="lipSyncLevel ?? 0"
+          />
+        </div>
+        <div
+          v-else-if="imageConfig"
+          class="sprite-visual"
+          :style="{ transform: imageTransform }"
+        >
+          <img
+            class="sprite-image"
+            :src="imageConfig.image_url"
+            :alt="characterName || characterId || 'character image'"
+          >
+        </div>
         <template v-else>
-          <div class="sprite-emoji">{{ currentMood.emoji }}</div>
+          <div class="sprite-visual" :style="{ transform: visualTransform }">
+            <div class="sprite-emoji">{{ currentMood.emoji }}</div>
+          </div>
           <div class="sprite-label" :style="{ color: currentMood.text }">
             {{ currentMood.label }}
           </div>
@@ -191,7 +281,7 @@ function clearManualSkin(): void {
   flex-direction: column;
   align-items: center;
   justify-content: space-between;
-  padding: 2px 8px 2px;
+  padding: 2px 2px 2px;
   -webkit-app-region: no-drag;
 }
 
@@ -210,7 +300,29 @@ function clearManualSkin(): void {
 .sprite-emoji {
   font-size: 38px;
   line-height: 1;
-  letter-spacing: 2px;
+  letter-spacing: 0;
+}
+
+.sprite-visual {
+  width: 100%;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transform-origin: center center;
+}
+
+.sprite-image {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  filter: drop-shadow(0 12px 24px rgba(48, 66, 86, 0.18));
+  user-select: none;
+  pointer-events: none;
 }
 
 .sprite-label {

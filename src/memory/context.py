@@ -15,3 +15,12 @@ class MemoryContext:
 
     long_term_items: dict[str, str] = field(default_factory=dict)
     """key→value 已确认事实，如 {"user_name": "小明"}。注入时总长度不超过 budget。"""
+
+    preference_items: dict[str, str] = field(default_factory=dict)
+    """用户偏好记忆，如称呼、回复风格、提醒频率和兴趣偏好。"""
+
+    boundary_items: dict[str, str] = field(default_factory=dict)
+    """用户明确要求避免、不要记录或不要再提及的边界信息。"""
+
+    event_items: dict[str, str] = field(default_factory=dict)
+    """近期重要事件、压力源、目标等结构化事件记忆。"""

@@ -11,8 +11,8 @@ from unittest.mock import patch
 
 import yaml
 
-from src.personality.character import CharacterConfig, PersonalityConfig
-from src.personality.emotion import EmotionState, detect_event
+from src.personality.character import CharacterConfig, EmotionProfileConfig, PersonalityConfig
+from src.personality.emotion import EmotionEvent, EmotionState, detect_event
 from src.personality.loader import load_character, validate_character
 from src.personality.prompt_builder import (
     PromptContext,
@@ -31,6 +31,7 @@ def _make_config(**kwargs) -> CharacterConfig:
         mood_expressions={"happy": "很开心", "angry": "很愤怒", "normal": "平静"},
         behavior_rules=["规则一"],
         verbal_habits=["口癖"],
+        emotion_profiles={},
         personality=PersonalityConfig(
             core_fear="害怕被遗忘",
             surface_trait="冷漠",
@@ -56,12 +57,15 @@ class TestEmotionState(unittest.TestCase):
         state = EmotionState()
         self.assertEqual(state.mood, "normal")
         self.assertEqual(state.persist_count, 0)
+        self.assertEqual(state.intensity, 0.0)
 
     def test_trigger_sets_mood_and_persist_count(self):
         state = EmotionState()
         state.trigger("happy")
         self.assertEqual(state.mood, "happy")
         self.assertEqual(state.persist_count, 3)
+        self.assertEqual(state.reason, "")
+        self.assertAlmostEqual(state.intensity, 0.6)
 
     def test_trigger_overwrites_existing_mood(self):
         state = EmotionState()
@@ -104,6 +108,7 @@ class TestEmotionState(unittest.TestCase):
         state.update(None)
         self.assertEqual(state.mood, "happy")
         self.assertEqual(state.persist_count, 2)
+        self.assertAlmostEqual(state.intensity, 0.4)
 
     def test_update_without_event_eventually_returns_to_normal(self):
         state = EmotionState()
@@ -119,6 +124,69 @@ class TestEmotionState(unittest.TestCase):
             state.decay()
         self.assertEqual(state.persist_count, 0)
 
+    def test_update_with_structured_event_tracks_reason_and_turn(self):
+        state = EmotionState()
+        state.update(
+            EmotionEvent(
+                mood="shy",
+                keyword="谢谢你",
+                reason="用户提到“谢谢你”",
+            ),
+            turn=4,
+        )
+
+        self.assertEqual(state.mood, "shy")
+        self.assertEqual(state.reason, "用户提到“谢谢你”")
+        self.assertEqual(state.keyword, "谢谢你")
+        self.assertEqual(state.source, "user_input")
+        self.assertEqual(state.started_at_turn, 4)
+        self.assertEqual(state.duration_turns, 3)
+        self.assertEqual(len(state.recent_events), 1)
+
+    def test_manual_state_preserves_requested_persist_count(self):
+        state = EmotionState()
+
+        state.set_manual_state("happy", persist_count=8)
+
+        self.assertEqual(state.persist_count, 8)
+        self.assertEqual(state.estimated_remaining_turns, 8)
+        self.assertAlmostEqual(state.intensity, 1.6)
+
+    def test_timeline_keeps_recent_segments_when_mood_changes(self):
+        state = EmotionState()
+
+        state.update(EmotionEvent(mood="happy", keyword="开心", reason="用户提到“开心”"), turn=2)
+        state.update(EmotionEvent(mood="angry", keyword="生气", reason="用户提到“生气”", intensity=0.9), turn=3)
+
+        self.assertEqual(state.mood, "angry")
+        self.assertEqual(len(state.timeline.segments), 1)
+        self.assertEqual(state.timeline.segments[0].mood, "happy")
+        self.assertEqual(state.timeline.segments[0].end_reason, "overridden_by:angry")
+
+    def test_timeline_decay_records_elapsed_turns_and_recovers_naturally(self):
+        state = EmotionState()
+        state.update(
+            EmotionEvent(
+                mood="happy",
+                keyword="开心",
+                reason="用户提到“开心”",
+                intensity=0.8,
+                recovery_rate=0.2,
+                profile=EmotionProfileConfig(min_duration_turns=1, max_duration_turns=8),
+            ),
+            turn=1,
+        )
+
+        state.timeline.update(None, turn=2)
+        state._sync_from_timeline()
+        self.assertEqual(state.elapsed_turns, 1)
+        self.assertEqual(state.persist_count, 3)
+
+        state.timeline.update(None, turn=6)
+        state._sync_from_timeline()
+        self.assertEqual(state.mood, "normal")
+        self.assertEqual(state.timeline.segments[-1].end_reason, "recovered")
+
 
 # ── detect_event 测试 ─────────────────────────────────────────────────────────
 
@@ -132,7 +200,10 @@ class TestDetectEvent(unittest.TestCase):
 
     def test_detects_matching_keyword(self):
         result = detect_event("今天真的太开心了", self._TRIGGERS)
-        self.assertEqual(result, "happy")
+        self.assertIsNotNone(result)
+        self.assertEqual(result.mood, "happy")
+        self.assertEqual(result.keyword, "开心")
+        self.assertEqual(result.reason, "用户提到“开心”")
 
     def test_returns_none_when_no_match(self):
         result = detect_event("今天天气不错", self._TRIGGERS)
@@ -141,7 +212,8 @@ class TestDetectEvent(unittest.TestCase):
     def test_detects_first_matching_emotion(self):
         # triggers 遍历顺序由字典插入顺序决定（Python 3.7+），应返回第一个命中
         result = detect_event("厉害", self._TRIGGERS)
-        self.assertEqual(result, "shy")
+        self.assertIsNotNone(result)
+        self.assertEqual(result.mood, "shy")
 
     def test_empty_input_returns_none(self):
         result = detect_event("", self._TRIGGERS)
@@ -154,7 +226,27 @@ class TestDetectEvent(unittest.TestCase):
     def test_keyword_as_substring_matches(self):
         # 触发词以子串匹配，不要求完整单词
         result = detect_event("这件事让我很生气啊", self._TRIGGERS)
-        self.assertEqual(result, "angry")
+        self.assertIsNotNone(result)
+        self.assertEqual(result.mood, "angry")
+
+    def test_detect_event_uses_emotion_profile_and_relationship_context(self):
+        profiles = {
+            "happy": EmotionProfileConfig(base_intensity=0.7, recovery_rate=0.1, stacking=0.5),
+        }
+        state = EmotionState()
+        state.update("happy")
+
+        result = detect_event(
+            "今天真的很开心",
+            self._TRIGGERS,
+            profiles,
+            relationship_context={"trust": 80, "intimacy": 60, "familiarity": 70},
+            previous_state=state,
+        )
+
+        self.assertIsNotNone(result)
+        self.assertAlmostEqual(result.recovery_rate, 0.1)
+        self.assertGreater(result.intensity, 0.7)
 
 
 # ── validate_character / load_character 测试 ─────────────────────────────────
@@ -265,6 +357,29 @@ class TestLoadCharacter(unittest.TestCase):
         self.assertEqual(config.verbal_habits, [])
         self.assertEqual(config.version, "")
 
+    def test_load_character_parses_emotion_profiles(self):
+        data = {
+            "name": "简单角色",
+            "forbidden_words": [],
+            "emotion_triggers": {"happy": ["开心"]},
+            "emotion_profiles": {
+                "happy": {
+                    "base_intensity": 0.75,
+                    "recovery_rate": 0.15,
+                    "min_duration_turns": 2,
+                    "max_duration_turns": 6,
+                    "stacking": 0.4,
+                    "tts": {"rate_delta": "+10%", "volume_delta": "+5%"},
+                }
+            },
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _make_yaml(tmp, data)
+            config = load_character(path)
+
+        self.assertIn("happy", config.emotion_profiles)
+        self.assertEqual(config.emotion_profiles["happy"].tts.rate_delta, "+10%")
+
 
 # ── build_system_prompt 测试 ──────────────────────────────────────────────────
 
@@ -298,6 +413,23 @@ class TestBuildSystemPrompt(unittest.TestCase):
         # 应注入 mood_expressions["happy"] 的描述，而不是裸写 "happy"
         self.assertIn("很开心", prompt)
 
+    def test_prompt_includes_emotion_reason_and_intensity_hint(self):
+        config = _make_config()
+        state = EmotionState()
+        state.trigger(
+            EmotionEvent(
+                mood="happy",
+                keyword="开心",
+                reason="用户提到“开心”",
+            ),
+            turn=2,
+        )
+
+        prompt = build_system_prompt(PromptContext(character=config, emotion=state))
+
+        self.assertIn("强度：中", prompt)
+        self.assertIn("原因：用户提到“开心”", prompt)
+
     def test_prompt_falls_back_to_raw_mood_when_no_expression(self):
         ctx = self._make_ctx(mood="normal", mood_expressions={"happy": "描述"})
         state = EmotionState()  # normal, no expression defined
@@ -316,6 +448,23 @@ class TestBuildSystemPrompt(unittest.TestCase):
         prompt = build_system_prompt(ctx)
         self.assertIn("小明", prompt)
         self.assertIn("上次聊了天气", prompt)
+
+    def test_prompt_keeps_identity_lock_and_typed_memory_sections(self):
+        from src.memory.context import MemoryContext
+
+        ctx = self._make_ctx()
+        ctx.memory = MemoryContext(
+            preference_items={"reply_style": "简短"},
+            boundary_items={"sensitive_topic": "不要再提工作细节"},
+            event_items={"recent_goal": "本周要完成论文"},
+        )
+
+        prompt = build_system_prompt(ctx)
+
+        self.assertIn("身份锁定", prompt)
+        self.assertIn("【用户偏好】", prompt)
+        self.assertIn("【用户边界】", prompt)
+        self.assertIn("【近期重要事件】", prompt)
 
     def test_prompt_without_memory_is_clean(self):
         ctx = self._make_ctx()

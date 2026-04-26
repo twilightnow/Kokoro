@@ -8,6 +8,10 @@ from typing import Optional
 import edge_tts
 
 
+class TTSDisabledError(RuntimeError):
+    """Raised when TTS is intentionally disabled by configuration."""
+
+
 @dataclass
 class TTSResult:
     audio_bytes: bytes
@@ -58,13 +62,27 @@ class EdgeTTSClient(TTSClient):
         )
 
 
+def read_tts_provider(provider: Optional[str] = None) -> str:
+    resolved = (provider or os.environ.get("TTS_PROVIDER") or "edge-tts").strip().lower()
+    return resolved or "edge-tts"
+
+
+def resolve_tts_provider(provider: Optional[str] = None) -> str:
+    resolved = read_tts_provider(provider)
+    if resolved in {"edge-tts", "edge_tts", "edge"}:
+        return "edge-tts"
+    if resolved == "disabled":
+        return "disabled"
+    raise EnvironmentError(f"不支持的 TTS_PROVIDER: {resolved}")
+
+
 def create_tts_client(
     provider: Optional[str] = None,
     voice: Optional[str] = None,
     rate: Optional[str] = None,
     volume: Optional[str] = None,
 ) -> TTSClient:
-    resolved = (provider or os.environ.get("TTS_PROVIDER") or "edge-tts").strip().lower()
-    if resolved not in {"edge-tts", "edge_tts", "edge"}:
-        raise EnvironmentError(f"不支持的 TTS_PROVIDER: {resolved}")
+    resolved = resolve_tts_provider(provider)
+    if resolved == "disabled":
+        raise TTSDisabledError("TTS 已禁用")
     return EdgeTTSClient(voice=voice, rate=rate, volume=volume)

@@ -51,20 +51,6 @@ const visible = computed(() => props.isThinking || Boolean(props.text))
   box-shadow: 0 14px 28px rgba(15, 23, 42, 0.16);
 }
 
-.bubble-box::after {
-  content: '';
-  position: absolute;
-  left: 34px;
-  bottom: -8px;
-  width: 14px;
-  height: 14px;
-  background: rgba(255, 255, 255, 0.94);
-  border-right: 1.5px solid #f2a4b8;
-  border-bottom: 1.5px solid #f2a4b8;
-  transform: rotate(45deg);
-  pointer-events: none;
-}
-
 .bubble-enter-active,
 .bubble-leave-active {
   transition: opacity 0.3s ease, transform 0.3s ease;

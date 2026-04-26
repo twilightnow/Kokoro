@@ -14,6 +14,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from ..service_registry import get_service
 from ..schemas import StreamChunk
+from ..stream_manager import get_stream_manager
 from ...application.conversation_service import ConversationService
 
 router = APIRouter(tags=["stream"])
@@ -21,7 +22,8 @@ router = APIRouter(tags=["stream"])
 
 @router.websocket("/stream")
 async def stream(websocket: WebSocket) -> None:
-    await websocket.accept()
+    manager = get_stream_manager()
+    await manager.connect(websocket)
     try:
         while True:
             data = await websocket.receive_text()
@@ -71,6 +73,8 @@ async def stream(websocket: WebSocket) -> None:
                         "content": reply,
                         "mood": service.character_state.mood,
                         "flagged": last_log.get("flagged", False),
+                        "emotion": service.current_emotion_summary.__dict__,
+                        "safety": last_log.get("safety"),
                     },
                 )
 
@@ -85,4 +89,4 @@ async def stream(websocket: WebSocket) -> None:
             await worker_task
 
     except WebSocketDisconnect:
-        pass
+        await manager.disconnect(websocket)

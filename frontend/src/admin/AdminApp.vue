@@ -78,6 +78,34 @@ import { ref, watch, onMounted, onUnmounted, provide } from 'vue'
 import { api } from './api'
 import { errorDetails, reportClientLog } from '../shared/diagnostics'
 
+type TauriRuntimeWindow = Window & {
+  __TAURI_INTERNALS__?: {
+    invoke?: unknown
+  }
+}
+
+function hasTauriInvoke(): boolean {
+  if (typeof window === 'undefined') {
+    return false
+  }
+
+  const tauriWindow = window as TauriRuntimeWindow
+  return typeof tauriWindow.__TAURI_INTERNALS__?.invoke === 'function'
+}
+
+async function invokeTauriCommand(
+  command: string,
+  args?: Record<string, unknown>,
+): Promise<boolean> {
+  if (!hasTauriInvoke()) {
+    return false
+  }
+
+  const { invoke } = await import('@tauri-apps/api/core')
+  await invoke(command, args)
+  return true
+}
+
 /**
  * ウィンドウを閉じる。
  * Rust コマンド (close_admin_window) を第一手段とし、
@@ -89,9 +117,12 @@ async function closeWindow() {
     event: 'admin-close-click',
     message: '管理界面关闭按钮被点击',
   })
+  if (!hasTauriInvoke()) {
+    window.close()
+    return
+  }
   try {
-    const { invoke } = await import('@tauri-apps/api/core')
-    await invoke('close_admin_window')
+    await invokeTauriCommand('close_admin_window')
     void reportClientLog({
       source: 'admin-window',
       event: 'admin-close-invoke-ok',
@@ -167,8 +198,7 @@ async function toggleAlwaysOnTop() {
   alwaysOnTop.value = !alwaysOnTop.value
   localStorage.setItem(MAIN_ALWAYS_ON_TOP_KEY, alwaysOnTop.value ? '1' : '0')
   try {
-    const { invoke } = await import('@tauri-apps/api/core')
-    await invoke('set_main_always_on_top', { enabled: alwaysOnTop.value })
+    await invokeTauriCommand('set_main_always_on_top', { enabled: alwaysOnTop.value })
   } catch {
     // 非 Tauri 環境や権限不足の場合は無視
   }
@@ -189,11 +219,16 @@ const mainNav = [
   { path: '/dashboard', icon: '📊', label: '状态总览' },
   { path: '/characters', icon: '👤', label: '角色管理' },
   { path: '/memories', icon: '🧠', label: '记忆浏览' },
+  { path: '/relationship', icon: '🤝', label: '关系状态' },
+  { path: '/proactive', icon: '💬', label: '主动陪伴' },
+  { path: '/perception', icon: '🛡', label: '感知隐私' },
+  { path: '/reminders', icon: '⏰', label: '提醒管理' },
   { path: '/logs', icon: '📄', label: '对话日志' },
   { path: '/stats', icon: '📈', label: '情绪统计' },
 ]
 
 const devNav = [
+  { path: '/interaction', icon: '🎛', label: '交互设置' },
   { path: '/settings', icon: '⚙️', label: '配置设置' },
   { path: '/debug', icon: '🔧', label: '调试工具' },
 ]
@@ -232,8 +267,7 @@ onMounted(async () => {
   document.documentElement.style.colorScheme = darkTheme.value ? 'dark' : 'light'
 
   try {
-    const { invoke } = await import('@tauri-apps/api/core')
-    await invoke('set_main_always_on_top', { enabled: alwaysOnTop.value })
+    await invokeTauriCommand('set_main_always_on_top', { enabled: alwaysOnTop.value })
   } catch (error) {
     void reportClientLog({
       source: 'admin-window',
@@ -361,6 +395,143 @@ body {
   background: #2d1a1a;
   border-color: #6b0000;
   color: #f38ba8;
+}
+
+/* ── 深色主题文本修复 ── */
+.theme-dark .hint {
+  color: #7f849c;
+}
+
+.theme-dark .muted {
+  color: #7f849c;
+}
+
+.theme-dark .empty-state,
+.theme-dark .empty {
+  color: #6c7086;
+}
+
+.theme-dark .stat-value {
+  color: #cdd6f4;
+}
+
+.theme-dark .stat-sub {
+  color: #7f849c;
+}
+
+.theme-dark .settings-list label,
+.theme-dark .compact-list label {
+  color: #cdd6f4;
+}
+
+.theme-dark .detail-k {
+  color: #a6adc8;
+}
+
+.theme-dark .detail-v {
+  color: #cdd6f4;
+}
+
+.theme-dark .detail-rule {
+  color: #cdd6f4;
+}
+
+.theme-dark .detail-section-title {
+  color: #7f849c;
+  border-bottom-color: #313244;
+}
+
+.theme-dark .detail-empty {
+  color: #6c7086;
+}
+
+.theme-dark .log-item {
+  background: rgba(30, 30, 46, 0.8);
+  border-color: #313244;
+}
+
+.theme-dark .log-content {
+  color: #cdd6f4;
+}
+
+.theme-dark .log-head strong {
+  color: #cdd6f4;
+}
+
+/* ── 深色主题标签 ── */
+.theme-dark .tag {
+  background: #313244;
+  color: #cdd6f4;
+}
+
+.theme-dark .tag-red { background: #3a1a1a; color: #f38ba8; }
+.theme-dark .tag-blue { background: #1a2535; color: #89b4fa; }
+.theme-dark .tag-purple { background: #261a35; color: #cba6f7; }
+.theme-dark .tag-amber { background: #2a200a; color: #f9e2af; }
+
+/* ── 深色主题徽章 ── */
+.theme-dark .badge-green { background: #1a2e1a; color: #a6e3a1; }
+.theme-dark .badge-yellow { background: #2a2008; color: #f9e2af; }
+.theme-dark .badge-red { background: #2e0808; color: #f38ba8; }
+.theme-dark .badge-blue { background: #08182e; color: #89b4fa; }
+.theme-dark .badge-gray { background: #313244; color: #a6adc8; }
+
+/* ── 深色主题卡片改善 ── */
+.theme-dark .card {
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.3);
+}
+
+/* ── 深色主题按钮 ── */
+.theme-dark .btn-primary {
+  box-shadow: 0 1px 3px rgba(59, 130, 246, 0.15);
+}
+
+/* ── 深色主题表单 ── */
+.theme-dark input[type='time'] {
+  background: #181825;
+  border-color: #45475a;
+  color: #cdd6f4;
+}
+
+/* ── 深色主题分隔线 ── */
+.theme-dark .divider {
+  background: #313244;
+}
+
+/* ── 深色主题滚动条 ── */
+.theme-dark ::-webkit-scrollbar {
+  width: 6px;
+}
+
+.theme-dark ::-webkit-scrollbar-track {
+  background: #181825;
+}
+
+.theme-dark ::-webkit-scrollbar-thumb {
+  background: #45475a;
+  border-radius: 3px;
+}
+
+.theme-dark ::-webkit-scrollbar-thumb:hover {
+  background: #6c7086;
+}
+
+/* ── 浅色主题滚动条 ── */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f3f4f6;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #d1d5db;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #9ca3af;
 }
 
 /* ── 侧边栏 ── */
@@ -511,25 +682,26 @@ body {
 /* ── 通用卡片 ── */
 .card {
   background: #fff;
-  border-radius: 8px;
-  padding: 16px 20px;
-  border: 1px solid #e8e8e8;
+  border-radius: 12px;
+  padding: 18px 22px;
+  border: 1px solid #e5e7eb;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04), 0 2px 8px rgba(0, 0, 0, 0.03);
 }
 
 .card-title {
-  font-size: 13px;
+  font-size: 11px;
   font-weight: 600;
-  color: #666;
+  color: #9ca3af;
   text-transform: uppercase;
-  letter-spacing: 0.5px;
-  margin-bottom: 8px;
+  letter-spacing: 0.8px;
+  margin-bottom: 12px;
 }
 
 .page-title {
-  font-size: 20px;
-  font-weight: 600;
-  color: #1a1a1a;
-  margin-bottom: 20px;
+  font-size: 22px;
+  font-weight: 700;
+  color: #111827;
+  margin-bottom: 24px;
 }
 
 .grid-2 {
@@ -552,8 +724,8 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 6px 14px;
-  border-radius: 6px;
+  padding: 7px 16px;
+  border-radius: 8px;
   font-size: 12px;
   font-weight: 500;
   cursor: pointer;
@@ -571,20 +743,23 @@ body {
   background: #3b82f6;
   color: #fff;
   border-color: #3b82f6;
+  box-shadow: 0 1px 3px rgba(59, 130, 246, 0.25);
 }
 
 .btn-primary:hover:not(:disabled) {
   background: #2563eb;
+  box-shadow: 0 2px 6px rgba(59, 130, 246, 0.35);
 }
 
 .btn-secondary {
   background: #fff;
   color: #374151;
   border-color: #d1d5db;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
 }
 
 .btn-secondary:hover:not(:disabled) {
-  background: #f9fafb;
+  background: #f3f4f6;
 }
 
 .btn-danger {
@@ -598,7 +773,7 @@ body {
 }
 
 .btn-sm {
-  padding: 4px 10px;
+  padding: 5px 12px;
   font-size: 11px;
 }
 

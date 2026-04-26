@@ -18,6 +18,8 @@ from ....character_defaults import (
     DEFAULT_CHARACTER_ENV,
     get_effective_default_character_id,
 )
+from ....personality.loader import parse_character_data
+from ...character_assets import validate_character_manifest
 from ...service_registry import get_service, switch_character
 from .config_mgr import _read_env_file, _write_env_file
 
@@ -50,6 +52,7 @@ class CharacterDetail(BaseModel):
     parsed: Dict[str, Any]
     raw_manifest: str = ""
     manifest: Dict[str, Any] = Field(default_factory=dict)
+    validation: Dict[str, Any] = Field(default_factory=dict)
 
 
 class UpdateCharacterRequest(BaseModel):
@@ -107,6 +110,7 @@ async def get_character(character_id: str) -> CharacterDetail:
         parsed=parsed,
         raw_manifest=raw_manifest,
         manifest=manifest,
+        validation=validate_character_manifest(character_id),
     )
 
 
@@ -117,9 +121,13 @@ async def update_character(character_id: str, body: UpdateCharacterRequest) -> D
         raise HTTPException(status_code=404, detail=f"角色不存在: {character_id}")
     # 先验证 YAML 合法性
     try:
-        yaml.safe_load(body.raw_yaml)
+        parsed = yaml.safe_load(body.raw_yaml) or {}
     except yaml.YAMLError as e:
         raise HTTPException(status_code=422, detail=f"YAML 格式错误: {e}")
+    try:
+        parse_character_data(parsed, yaml_path)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
     yaml_path.write_text(body.raw_yaml, encoding="utf-8")
     return {"status": "saved", "message": "配置已保存，需重新加载角色才能生效"}
 

@@ -19,6 +19,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from ...service_registry import get_service
+from ....memory.long_term_memory import LongTermMemory, normalize_fact_category
+from ....memory.record import MemoryRecord
 
 router = APIRouter(prefix="/memories")
 
@@ -51,18 +53,30 @@ def _save_facts(character_id: str, data: Dict[str, Any]) -> None:
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _memory_store() -> LongTermMemory:
+    return LongTermMemory(_data_dir())
+
+
 class FactItem(BaseModel):
+    record_id: str
     key: str
     value: str
+    category: str = "fact"
     source: str = "user"
+    status: str = "confirmed"
     updated_at: str = ""
     pending_confirm: bool = False
     pending_value: Optional[str] = None
+    pending_category: Optional[str] = None
+    evidence: Optional[str] = None
+    confidence: Optional[float] = None
+    supersedes_record_id: Optional[str] = None
 
 
 class FactUpsertRequest(BaseModel):
     value: str
     source: str = "user"
+    category: Optional[str] = None
 
 
 class FactResolveRequest(BaseModel):
@@ -76,6 +90,17 @@ class SummaryItem(BaseModel):
     created_at: str
 
 
+class SummaryUpdateRequest(BaseModel):
+    summary: str
+
+
+class MemoryExportResponse(BaseModel):
+    character_id: str
+    exported_at: str
+    facts: List[FactItem]
+    summaries: List[SummaryItem]
+
+
 class SummaryListResponse(BaseModel):
     items: List[SummaryItem]
     total: int
@@ -83,20 +108,64 @@ class SummaryListResponse(BaseModel):
     limit: int
 
 
-@router.get("/{character_id}/facts", response_model=List[FactItem])
-async def list_facts(character_id: str) -> List[FactItem]:
-    raw = _load_facts(character_id)
-    result = []
-    for key, d in raw.items():
-        result.append(FactItem(
-            key=d.get("key", key),
-            value=d.get("value", ""),
-            source=d.get("source", "user"),
-            updated_at=d.get("updated_at", ""),
-            pending_confirm=d.get("pending_confirm", False),
-            pending_value=d.get("pending_value"),
-        ))
+async def _list_facts_impl(
+    character_id: str,
+    category: Optional[str] = None,
+    query: str = "",
+) -> List[FactItem]:
+    store = _memory_store()
+    records = store.read_records(character_id)
+    result: List[FactItem] = []
+    normalized_category = normalize_fact_category(category) if category else None
+    search = query.strip().lower()
+    grouped: Dict[str, Dict[str, Optional[MemoryRecord]]] = {}
+    for record in records.values():
+        if record.status in {"archived", "rejected"}:
+            continue
+        slot = grouped.setdefault(record.key, {"confirmed": None, "candidate": None})
+        current = slot.get(record.status)
+        if record.status in {"confirmed", "candidate"} and (
+            current is None or (current.updated_at, current.record_id) < (record.updated_at, record.record_id)
+        ):
+            slot[record.status] = record
+
+    for key, slot in grouped.items():
+        confirmed = slot.get("confirmed")
+        candidate = slot.get("candidate")
+        primary = confirmed or candidate
+        if primary is None:
+            continue
+        item = FactItem(
+            record_id=primary.record_id,
+            key=primary.key,
+            value=primary.value,
+            category=normalize_fact_category(primary.memory_type),
+            source=primary.source,
+            status=primary.status,
+            updated_at=primary.updated_at,
+            pending_confirm=candidate is not None,
+            pending_value=(candidate.value if confirmed and candidate else None),
+            pending_category=(candidate.memory_type if confirmed and candidate else None),
+            evidence=primary.evidence,
+            confidence=primary.confidence,
+            supersedes_record_id=primary.supersedes_record_id,
+        )
+        if normalized_category and item.category != normalized_category:
+            continue
+        if search and search not in item.key.lower() and search not in item.value.lower():
+            continue
+        result.append(item)
+    result.sort(key=lambda item: item.updated_at, reverse=True)
     return result
+
+
+@router.get("/{character_id}/facts", response_model=List[FactItem])
+async def list_facts(
+    character_id: str,
+    category: Optional[str] = Query(default=None),
+    query: str = Query(default=""),
+) -> List[FactItem]:
+    return await _list_facts_impl(character_id, category=category, query=query)
 
 
 @router.post("/{character_id}/facts", status_code=201)
@@ -105,18 +174,21 @@ async def create_fact(
     body: FactUpsertRequest,
     key: str = Query(..., description="事实键名"),
 ) -> Dict[str, str]:
-    from datetime import datetime
-    raw = _load_facts(character_id)
-    raw[key] = {
+    normalized_category = normalize_fact_category(body.category)
+    mutation = _memory_store().write_record(
+        character_id,
+        key,
+        body.value,
+        source=body.source,
+        memory_type=normalized_category,
+        status="confirmed",
+    )
+    return {
+        "status": mutation.action,
         "key": key,
-        "value": body.value,
-        "source": body.source,
-        "updated_at": datetime.now().isoformat(),
-        "pending_confirm": False,
-        "pending_value": None,
+        "category": normalized_category,
+        "record_id": mutation.record.record_id,
     }
-    _save_facts(character_id, raw)
-    return {"status": "created", "key": key}
 
 
 @router.put("/{character_id}/facts/{key}", status_code=200)
@@ -125,19 +197,25 @@ async def update_fact(
     key: str,
     body: FactUpsertRequest,
 ) -> Dict[str, str]:
-    from datetime import datetime
-    raw = _load_facts(character_id)
-    if key not in raw:
+    existing = await _list_facts_impl(character_id, query=key)
+    if not any(item.key == key for item in existing):
         raise HTTPException(status_code=404, detail=f"事实不存在: {key}")
-    raw[key].update({
-        "value": body.value,
-        "source": body.source,
-        "updated_at": datetime.now().isoformat(),
-        "pending_confirm": False,
-        "pending_value": None,
-    })
-    _save_facts(character_id, raw)
-    return {"status": "updated", "key": key}
+    current_category = next((item.category for item in existing if item.key == key), "fact")
+    next_category = normalize_fact_category(body.category or current_category)
+    mutation = _memory_store().write_record(
+        character_id,
+        key,
+        body.value,
+        source=body.source,
+        memory_type=next_category,
+        status="confirmed",
+    )
+    return {
+        "status": mutation.action,
+        "key": key,
+        "category": next_category,
+        "record_id": mutation.record.record_id,
+    }
 
 
 @router.post("/{character_id}/facts/{key}/resolve", status_code=200)
@@ -146,27 +224,23 @@ async def resolve_conflict(
     key: str,
     body: FactResolveRequest,
 ) -> Dict[str, str]:
-    from datetime import datetime
-    raw = _load_facts(character_id)
-    if key not in raw:
+    try:
+        mutation = _memory_store().resolve_candidate(character_id, key, body.adopt_new)
+    except KeyError:
         raise HTTPException(status_code=404, detail=f"事实不存在: {key}")
-    record = raw[key]
-    if body.adopt_new and record.get("pending_value"):
-        record["value"] = record["pending_value"]
-        record["updated_at"] = datetime.now().isoformat()
-    record["pending_confirm"] = False
-    record["pending_value"] = None
-    _save_facts(character_id, raw)
-    return {"status": "resolved", "key": key, "action": "adopted" if body.adopt_new else "kept"}
+    return {
+        "status": mutation.action,
+        "key": key,
+        "action": "adopted" if body.adopt_new else "kept",
+        "record_id": mutation.record.record_id,
+    }
 
 
 @router.delete("/{character_id}/facts/{key}", status_code=200)
 async def delete_fact(character_id: str, key: str) -> Dict[str, str]:
-    raw = _load_facts(character_id)
-    if key not in raw:
+    removed = _memory_store().archive_records(character_id, key=key)
+    if not removed:
         raise HTTPException(status_code=404, detail=f"事实不存在: {key}")
-    del raw[key]
-    _save_facts(character_id, raw)
     return {"status": "deleted", "key": key}
 
 
@@ -199,6 +273,31 @@ async def list_summaries(
     return SummaryListResponse(items=items, total=total, offset=offset, limit=limit)
 
 
+@router.put("/{character_id}/summaries/{index}", status_code=200)
+async def update_summary(character_id: str, index: int, body: SummaryUpdateRequest) -> Dict[str, Any]:
+    summary = body.summary.strip()
+    if not summary:
+        raise HTTPException(status_code=422, detail="摘要不能为空")
+
+    path = _summaries_path(character_id)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="摘要文件不存在")
+
+    lines = [l for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
+    if index < 0 or index >= len(lines):
+        raise HTTPException(status_code=404, detail=f"摘要索引越界: {index}")
+
+    try:
+        record = json.loads(lines[index])
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=422, detail=f"摘要记录损坏: {exc}")
+
+    record["summary"] = summary[:100]
+    lines[index] = json.dumps(record, ensure_ascii=False)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return {"status": "updated", "index": index}
+
+
 @router.delete("/{character_id}/summaries/{index}", status_code=200)
 async def delete_summary(character_id: str, index: int) -> Dict[str, str]:
     path = _summaries_path(character_id)
@@ -212,13 +311,75 @@ async def delete_summary(character_id: str, index: int) -> Dict[str, str]:
     return {"status": "deleted", "index": index}
 
 
+@router.get("/{character_id}/export", response_model=MemoryExportResponse)
+async def export_memories(character_id: str) -> MemoryExportResponse:
+    from datetime import datetime, timezone
+
+    facts = await _list_facts_impl(character_id)
+    summaries_path = _summaries_path(character_id)
+    summary_items: List[SummaryItem] = []
+    if summaries_path.exists():
+        lines = [line.strip() for line in summaries_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        for index, line in enumerate(lines):
+            try:
+                record = json.loads(line)
+                summary_items.append(SummaryItem(
+                    index=index,
+                    summary=record.get("summary", ""),
+                    created_at=record.get("created_at", ""),
+                ))
+            except json.JSONDecodeError:
+                continue
+    return MemoryExportResponse(
+        character_id=character_id,
+        exported_at=datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
+        facts=facts,
+        summaries=summary_items,
+    )
+
+
 @router.delete("/{character_id}", status_code=200)
-async def clear_memories(character_id: str) -> Dict[str, str]:
-    """清空角色全部记忆（facts.json + summaries.jsonl）。危险操作。"""
+async def clear_memories(
+    character_id: str,
+    kind: str = Query(default="all"),
+) -> Dict[str, Any]:
+    """清空角色全部或指定类型记忆。"""
+    normalized_kind = kind.strip().lower()
+    if normalized_kind not in {"all", "summaries", "facts", "preferences", "boundaries", "events"}:
+        raise HTTPException(status_code=422, detail=f"不支持的清空类型: {kind}")
+
     deleted = []
-    for fname in ["facts.json", "summaries.jsonl", "truncation.log"]:
-        p = _data_dir() / "memories" / character_id / fname
-        if p.exists():
-            p.unlink()
-            deleted.append(fname)
-    return {"status": "cleared", "deleted": deleted}
+
+    if normalized_kind in {"all", "summaries"}:
+        summary_path = _data_dir() / "memories" / character_id / "summaries.jsonl"
+        if summary_path.exists():
+            summary_path.unlink()
+            deleted.append("summaries.jsonl")
+
+    if normalized_kind == "all":
+        truncation_path = _data_dir() / "memories" / character_id / "truncation.log"
+        if truncation_path.exists():
+            truncation_path.unlink()
+            deleted.append("truncation.log")
+
+    if normalized_kind in {"all", "facts", "preferences", "boundaries", "events"}:
+        if normalized_kind == "all":
+            if _facts_path(character_id).exists():
+                _facts_path(character_id).unlink()
+                deleted.append("facts.json")
+        else:
+            category_map = {
+                "facts": "fact",
+                "preferences": "preference",
+                "boundaries": "boundary",
+                "events": "event",
+            }
+            target_category = category_map[normalized_kind]
+            removed = _memory_store().archive_records(
+                character_id,
+                memory_type=target_category,
+            )
+            if removed:
+                deleted.append(f"facts:{target_category}:{removed}")
+
+    return {"status": "cleared", "kind": normalized_kind, "deleted": deleted}

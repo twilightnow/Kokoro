@@ -12,7 +12,9 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from .context import MemoryContext
-from .long_term_memory import LongTermMemory
+from .memory_ops_log import MemoryOpsLog
+from .long_term_memory import LongTermMemory, normalize_fact_category
+from .record import MemoryRecord
 from .summary_memory import SummaryMemory
 from .truncation_log import TruncationLog
 from .working_memory import WorkingMemory
@@ -24,12 +26,48 @@ _SUMMARY_SYSTEM_PROMPT = (
 )
 _FACT_EXTRACT_PROMPT = (
     "你是信息提取助手。从以下对话中提取用户（User）明确陈述的个人信息，"
-    "例如名字、职业、爱好、习惯等。只提取用户主动说出的内容，不要推断。\n\n"
-    "输出格式为 JSON 对象，key 为信息类别（英文小写下划线），value 为用户原话中的值。"
-    "例如：{\"user_name\": \"小明\", \"user_job\": \"程序员\"}\n\n"
-    "如果没有可提取的信息，输出空对象 {}。只输出 JSON，不要其他内容。"
+    "例如名字、职业、爱好、习惯、偏好、边界、近期事件。只提取用户主动说出的内容，不要推断。\n\n"
+    "优先输出如下 JSON 结构："
+    "{\"items\": [{\"type\": \"fact|preference|boundary|event\", \"key\": \"...\", \"value\": \"...\", \"confidence\": 0.0, \"evidence\": \"用户原句\"}]}。"
+    "如果无法提供 items 结构，也可以退化为扁平 JSON 对象。"
+    "如果没有可提取的信息，输出 {\"items\": []}。只输出 JSON，不要其他内容。"
 )
 _SUMMARY_MAX_ITEMS = 3
+_FACT_CATEGORY_PRIORITY = {
+    "boundary": 0,
+    "preference": 1,
+    "fact": 2,
+    "event": 3,
+}
+_FACT_TRIGGER_MARKERS = (
+    "我叫",
+    "叫我",
+    "我是",
+    "我在",
+    "我住",
+    "我来自",
+    "我喜欢",
+    "我不喜欢",
+    "我希望",
+    "我想",
+    "我最近",
+    "今天",
+    "这周",
+    "计划",
+    "目标",
+    "不要",
+    "别再",
+    "别提",
+    "隐私",
+    "工作",
+    "学校",
+    "家人",
+    "生日",
+    "prefer",
+    "favorite",
+    "boundary",
+    "privacy",
+)
 
 
 class MemoryService:
@@ -42,6 +80,7 @@ class MemoryService:
         self._working_memory = WorkingMemory(max_rounds=10)
         self._summary_memory = SummaryMemory(data_dir)
         self._long_term_memory = LongTermMemory(data_dir)
+        self._ops_log = MemoryOpsLog(data_dir)
         self._truncation_log = TruncationLog(data_dir)
 
     @property
@@ -53,64 +92,162 @@ class MemoryService:
         self,
         character_id: str,
         token_budget: int = 500,
+        query_text: str = "",
     ) -> MemoryContext:
-        """生成当前轮次的记忆上下文，由人格层注入 system prompt。
-
-        token 分配策略：
-          长期事实预算 = min(token_budget // 2, 200)  — 最多占一半，上限 200
-          摘要预算     = token_budget - 实际使用的长期事实 token 数
-        """
+        """生成当前轮次的记忆上下文，由人格层注入 system prompt。"""
         if token_budget <= 0:
             return MemoryContext()
 
-        # ── 长期事实裁剪 ────────────────────────────────────────────────────────
-        fact_budget = min(token_budget // 2, 200)
-        all_facts = self._long_term_memory.read_facts(character_id)
-        # 只取已确认事实，按 updated_at 降序（最新优先）
-        confirmed = [
-            (k, v)
-            for k, v in all_facts.items()
-            if not v.pending_confirm
+        records = self.retrieve(
+            query_text=query_text,
+            character_id=character_id,
+            filters={"status": "confirmed"},
+        )
+        return self.build_context(character_id, records, token_budget)
+
+    def retrieve(
+        self,
+        query_text: str,
+        character_id: str,
+        filters: Optional[Dict[str, str]] = None,
+    ) -> List[MemoryRecord]:
+        """Retrieve structured memory records from the current repository backend."""
+        filters = filters or {}
+        expected_status = filters.get("status")
+        expected_type = filters.get("type")
+        query = query_text.strip().lower()
+        query_terms = [term for term in query.split() if term]
+
+        records = [
+            record
+            for record in self._long_term_memory.read_records(character_id).values()
+            if record.status not in {"archived", "rejected"}
         ]
-        confirmed.sort(key=lambda kv: kv[1].updated_at, reverse=True)
+        blocked_keys = {
+            record.key
+            for record in records
+            if record.status == "candidate" and record.memory_type != "event"
+        }
+        if expected_status:
+            records = [record for record in records if record.status == expected_status]
+        if expected_type:
+            records = [record for record in records if record.memory_type == normalize_fact_category(expected_type)]
+        records = [
+            record
+            for record in records
+            if not (
+                record.status == "confirmed"
+                and record.key in blocked_keys
+                and record.memory_type != "event"
+            )
+        ]
+
+        def score(record: MemoryRecord) -> tuple[int, int, str, str]:
+            text = " ".join(
+                part for part in [record.key, record.value, record.evidence or ""] if part
+            ).lower()
+            match_score = 0
+            if not query_terms:
+                match_score = 1
+            else:
+                for term in query_terms:
+                    if term in record.key.lower():
+                        match_score += 5
+                    elif term in text:
+                        match_score += 3
+            return (
+                match_score,
+                -_FACT_CATEGORY_PRIORITY.get(normalize_fact_category(record.memory_type), 99),
+                record.updated_at,
+                record.record_id,
+            )
+
+        ranked = sorted(records, key=score, reverse=True)
+        if query_terms:
+            matched = [record for record in ranked if score(record)[0] > 0]
+        else:
+            matched = ranked
+
+        self._ops_log.record(
+            character_id,
+            "retrieve_completed",
+            query=query_text,
+            returned=len(matched),
+            filters=filters,
+        )
+        return matched
+
+    def build_context(
+        self,
+        character_id: str,
+        records: List[MemoryRecord],
+        token_budget: int,
+    ) -> MemoryContext:
+        """Build prompt-facing memory context from retrieved records."""
+
+        fact_budget = min(token_budget // 2, 200)
+        confirmed = [
+            record
+            for record in records
+            if record.status == "confirmed"
+        ]
+        confirmed.sort(
+            key=lambda record: (
+                _FACT_CATEGORY_PRIORITY.get(normalize_fact_category(record.memory_type), 99),
+                record.updated_at,
+                record.record_id,
+            )
+        )
 
         selected_facts: Dict[str, str] = {}
+        selected_preferences: Dict[str, str] = {}
+        selected_boundaries: Dict[str, str] = {}
+        selected_events: Dict[str, str] = {}
         used_fact_tokens = 0
-        dropped_fact_keys: List[str] = []
-        for key, record in confirmed:
-            text = f"{key}: {record.value}"
+        dropped_fact_ids: List[str] = []
+        for record in confirmed:
+            text = f"{record.key}: {record.value}"
             tokens = _estimate_tokens(text)
             if used_fact_tokens + tokens <= fact_budget:
-                selected_facts[key] = record.value
+                category = normalize_fact_category(record.memory_type)
+                if category == "preference":
+                    selected_preferences[record.key] = record.value
+                elif category == "boundary":
+                    selected_boundaries[record.key] = record.value
+                elif category == "event":
+                    event_key = record.key
+                    if event_key in selected_events:
+                        event_key = f"{record.key}:{record.record_id[:8]}"
+                    selected_events[event_key] = record.value
+                else:
+                    selected_facts[record.key] = record.value
                 used_fact_tokens += tokens
             else:
-                dropped_fact_keys.append(key)
+                dropped_fact_ids.append(record.record_id)
 
-        if dropped_fact_keys:
+        if dropped_fact_ids:
             self._truncation_log.record(
                 character_id=character_id,
                 kind="fact",
-                dropped_keys=dropped_fact_keys,
+                dropped_keys=dropped_fact_ids,
                 budget=fact_budget,
                 used=used_fact_tokens,
             )
 
-        # ── 摘要裁剪 ────────────────────────────────────────────────────────────
         summary_budget = token_budget - used_fact_tokens
         all_summaries = self._summary_memory.load_recent_summaries(
             character_id, n=5
         )
-        # load_recent_summaries 返回旧→新顺序，反转后从最新开始尝试填充
         selected_summaries: List[str] = []
         used_summary_tokens = 0
         dropped_summaries: List[str] = []
         for summary in reversed(all_summaries):
             tokens = _estimate_tokens(summary)
             if used_summary_tokens + tokens <= summary_budget:
-                selected_summaries.insert(0, summary)  # 保持旧→新顺序
+                selected_summaries.insert(0, summary)
                 used_summary_tokens += tokens
             else:
-                dropped_summaries.append(summary[:20])  # 只记录前 20 字便于追溯
+                dropped_summaries.append(summary[:20])
 
         if dropped_summaries:
             self._truncation_log.record(
@@ -124,7 +261,64 @@ class MemoryService:
         return MemoryContext(
             summary_items=selected_summaries,
             long_term_items=selected_facts,
+            preference_items=selected_preferences,
+            boundary_items=selected_boundaries,
+            event_items=selected_events,
         )
+
+    def _categorize_fact(self, key: str, value: str) -> str:
+        normalized_key = key.strip().lower()
+        normalized_value = value.strip().lower()
+
+        preference_markers = (
+            "pref",
+            "prefer",
+            "favorite",
+            "like",
+            "dislike",
+            "habit",
+            "hobby",
+            "style",
+            "voice",
+            "tone",
+            "address",
+        )
+        boundary_markers = (
+            "boundary",
+            "limit",
+            "avoid",
+            "privacy",
+            "sensitive",
+            "forbid",
+            "forbidden",
+            "do_not",
+            "dont",
+        )
+        event_markers = (
+            "event",
+            "recent",
+            "goal",
+            "stress",
+            "pressure",
+            "project",
+            "todo",
+            "deadline",
+            "plan",
+        )
+
+        if any(marker in normalized_key for marker in boundary_markers):
+            return "boundary"
+        if any(marker in normalized_key for marker in preference_markers):
+            return "preference"
+        if any(marker in normalized_key for marker in event_markers):
+            return "event"
+        if any(marker in normalized_value for marker in ("不要", "别再", "不想", "别提", "隐私")):
+            return "boundary"
+        if any(marker in normalized_value for marker in ("喜欢", "偏好", "希望", "叫我", "称呼", "语气")):
+            return "preference"
+        if any(marker in normalized_value for marker in ("最近", "这周", "今天", "目标", "压力", "截止")):
+            return "event"
+        return "fact"
 
     def _extract_facts(
         self,
@@ -134,27 +328,101 @@ class MemoryService:
     ) -> None:
         """调用 LLM 从对话历史提取用户显式陈述的事实，写入 LongTermMemory。
 
-        失败时静默，不抛出异常，不影响主链路。
+        失败时不抛出异常，不影响主链路，但会写入 memory_ops 日志。
         """
+        self._ops_log.record(character_id, "extract_started", message_count=len(history))
         try:
             result = llm_chat_fn(_FACT_EXTRACT_PROMPT, history)
             raw_text: str = result.text if hasattr(result, "text") else str(result)
             raw_text = raw_text.strip()
-            # 尝试从 markdown 代码块中提取 JSON
             if raw_text.startswith("```"):
                 lines = raw_text.splitlines()
-                # 去掉首尾 ``` 行
                 raw_text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
-            facts: Dict[str, Any] = json.loads(raw_text)
-            if not isinstance(facts, dict):
+            payload: Dict[str, Any] = json.loads(raw_text)
+            items = self._normalize_extracted_items(payload)
+            if not items:
+                self._ops_log.record(character_id, "extract_empty")
                 return
-            for key, value in facts.items():
-                if isinstance(value, str) and value.strip():
-                    self._long_term_memory.write_fact(
-                        character_id, key, value.strip(), source="llm_extract"
-                    )
-        except (json.JSONDecodeError, Exception):
-            pass
+            for item in items:
+                mutation = self._long_term_memory.write_record(
+                    character_id,
+                    item["key"],
+                    item["value"],
+                    source="llm_extract",
+                    memory_type=item["memory_type"],
+                    status="candidate",
+                    evidence=item.get("evidence"),
+                    confidence=item.get("confidence"),
+                    metadata={"extracted": True},
+                )
+                self._ops_log.record(
+                    character_id,
+                    mutation.action,
+                    record_id=mutation.record.record_id,
+                    key=mutation.record.key,
+                    memory_type=mutation.record.memory_type,
+                    related_record_id=mutation.related_record_id,
+                )
+        except json.JSONDecodeError as error:
+            self._ops_log.record(character_id, "parse_failed", error=str(error))
+        except Exception as error:
+            self._ops_log.record(character_id, "persist_failed", error=str(error))
+
+    def _normalize_extracted_items(self, payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+        items: List[Dict[str, Any]] = []
+        raw_items = payload.get("items") if isinstance(payload, dict) else None
+        if isinstance(raw_items, list):
+            for raw in raw_items:
+                if not isinstance(raw, dict):
+                    continue
+                key = str(raw.get("key") or "").strip()
+                value = str(raw.get("value") or "").strip()
+                if not key or not value:
+                    continue
+                items.append({
+                    "key": key,
+                    "value": value,
+                    "memory_type": normalize_fact_category(raw.get("type")),
+                    "confidence": (
+                        float(raw["confidence"])
+                        if isinstance(raw.get("confidence"), (int, float))
+                        else None
+                    ),
+                    "evidence": str(raw.get("evidence") or "").strip() or None,
+                })
+            return items
+
+        if not isinstance(payload, dict):
+            return items
+
+        for key, value in payload.items():
+            if key == "items":
+                continue
+            if not isinstance(value, str) or not value.strip():
+                continue
+            items.append({
+                "key": key,
+                "value": value.strip(),
+                "memory_type": self._categorize_fact(key, value),
+                "confidence": None,
+                "evidence": None,
+            })
+        return items
+
+    def _should_extract_facts(self, history: List[Dict[str, str]]) -> bool:
+        user_messages = [
+            str(item.get("content", "")).strip().lower()
+            for item in history
+            if item.get("role") == "user"
+        ]
+        if not user_messages:
+            return False
+
+        combined = "\n".join(message for message in user_messages if message)
+        if not combined:
+            return False
+
+        return any(marker in combined for marker in _FACT_TRIGGER_MARKERS)
 
     def on_session_end(
         self,
@@ -178,9 +446,14 @@ class MemoryService:
             summary: str = result.text if hasattr(result, "text") else str(result)
             if summary.strip():
                 self._summary_memory.save_summary(character_id, summary.strip())
-        except Exception:
-            pass
+                self._ops_log.record(character_id, "summary_created", length=len(summary.strip()))
+            else:
+                self._ops_log.record(character_id, "summary_empty")
+        except Exception as error:
+            self._ops_log.record(character_id, "summary_failed", error=str(error))
 
         # 步骤 2：提取长期事实（轮数 ≥ 2 才值得提取）
-        if len(history) >= 2:
+        if len(history) >= 2 and self._should_extract_facts(history):
             self._extract_facts(character_id, history, llm_chat_fn)
+        elif len(history) >= 2:
+            self._ops_log.record(character_id, "extract_skipped")

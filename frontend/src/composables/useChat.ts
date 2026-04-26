@@ -1,6 +1,6 @@
 import { ref } from 'vue'
 import { useChatStore } from '../stores/chat'
-import type { CharacterDisplayConfig, Mood, StreamChunk } from '../types/chat'
+import type { CharacterDisplayConfig, EmotionSummary, Mood, StreamChunk } from '../types/chat'
 import { sidecarHttpUrl, sidecarWsUrl } from '../shared/sidecar'
 import { useSpeechOutput } from './useSpeechOutput'
 
@@ -24,15 +24,27 @@ const errorMessage = ref<string>('')
 let ws: WebSocket | null = null
 let retryCount = 0
 let pendingMessage: string | null = null
+let proactiveTimer: number | null = null
 const speechOutput = useSpeechOutput()
 
 function isMood(value: unknown): value is Mood {
   return typeof value === 'string' && value.trim().length > 0
 }
 
+function isEmotionSummary(value: unknown): value is EmotionSummary {
+  return typeof value === 'object' && value !== null && typeof (value as EmotionSummary).mood === 'string'
+}
+
 function _doSend(text: string): void {
   if (ws?.readyState !== WebSocket.OPEN) return
   ws.send(JSON.stringify({ message: text }))
+}
+
+function _clearProactiveTimer(): void {
+  if (proactiveTimer !== null) {
+    window.clearTimeout(proactiveTimer)
+    proactiveTimer = null
+  }
 }
 
 function _scheduleReconnect(): void {
@@ -58,29 +70,58 @@ function _handleChunk(raw: string): void {
 
   switch (chunk.type) {
     case 'thinking':
+      _clearProactiveTimer()
       store.setThinking(true)
-      speechOutput.beginStream()
+      speechOutput.beginStream(store.emotion)
       break
     case 'token':
       store.appendReply(chunk.content)
       speechOutput.pushToken(chunk.content)
       break
     case 'done':
+      _clearProactiveTimer()
       store.setThinking(false)
       if (chunk.content) store.setReply(chunk.content)
+      if (isEmotionSummary(chunk.emotion)) store.setEmotion(chunk.emotion)
       if (isMood(chunk.mood)) store.setMood(chunk.mood)
-      speechOutput.finishStream(chunk.content)
+      speechOutput.finishStream(chunk.content, isEmotionSummary(chunk.emotion) ? chunk.emotion : store.emotion)
       store.incrementTurn()
       break
     case 'error':
+      _clearProactiveTimer()
       store.setThinking(false)
       speechOutput.stop()
       errorMessage.value = chunk.content
       break
     case 'proactive':
+      _clearProactiveTimer()
       store.setThinking(false)
-      store.setProactiveMessage(chunk.content)
-      speechOutput.speakNow(chunk.content)
+      if (isEmotionSummary(chunk.emotion)) {
+        store.setEmotion(chunk.emotion)
+      }
+      if (isMood(chunk.expression ?? chunk.mood)) {
+        store.setMood((chunk.expression ?? chunk.mood) as Mood)
+      }
+      store.setProactiveFrame({
+        eventId: chunk.id,
+        level: chunk.level,
+        scene: chunk.scene,
+        content: chunk.content,
+        actions: chunk.actions,
+      })
+      if (chunk.level === 'short') {
+        proactiveTimer = window.setTimeout(() => {
+          store.clearProactiveMessage()
+        }, 6000)
+      }
+      if (chunk.level === 'expression') {
+        proactiveTimer = window.setTimeout(() => {
+          store.clearProactiveMessage()
+        }, 1500)
+      }
+      if (chunk.level === 'full' && chunk.content) {
+        speechOutput.speakNow(chunk.content, isEmotionSummary(chunk.emotion) ? chunk.emotion : store.emotion)
+      }
       break
     default:
       break
@@ -136,6 +177,7 @@ async function fetchCharacterInfo(): Promise<void> {
       display?: CharacterDisplayConfig
       turn: number
       mood: string
+      emotion?: EmotionSummary
     }
     useChatStore().setCharacterInfo(
       data.character_id,
@@ -143,6 +185,7 @@ async function fetchCharacterInfo(): Promise<void> {
       data.turn,
       data.display ?? { mode: 'placeholder' },
     )
+    if (isEmotionSummary(data.emotion)) useChatStore().setEmotion(data.emotion)
     if (isMood(data.mood)) useChatStore().setMood(data.mood)
   } catch {
     // Ignore bootstrap errors here.
@@ -173,6 +216,25 @@ function sendMessage(text: string): void {
   }
 }
 
+async function sendProactiveFeedback(feedback: string): Promise<void> {
+  const store = useChatStore()
+  if (!store.proactiveEventId) return
+
+  try {
+    await fetch(sidecarHttpUrl('/admin/proactive/feedback'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        event_id: store.proactiveEventId,
+        feedback,
+        responded: true,
+      }),
+    })
+  } catch {
+    // 反馈记录失败时不阻断正常聊天。
+  }
+}
+
 export function useChat() {
-  return { status, errorMessage, init, sendMessage, syncState }
+  return { status, errorMessage, init, sendMessage, sendProactiveFeedback, syncState }
 }

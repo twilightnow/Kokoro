@@ -3,7 +3,7 @@ import os
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 
 def _default_log_dir() -> Path:
@@ -31,6 +31,11 @@ class SessionLogger:
     def log_path(self) -> Path:
         return self._log_path
 
+    @property
+    def records(self) -> list[Dict[str, Any]]:
+        """返回当前会话已写入内存的日志记录副本。"""
+        return list(self._records)
+
     def log(
         self,
         turn: int,
@@ -41,6 +46,7 @@ class SessionLogger:
         reply: str,
         flagged: bool,
         usage: Optional[Dict] = None,
+        safety: Optional[Dict] = None,
     ) -> None:
         record: Dict = {
             "turn": turn,
@@ -54,6 +60,8 @@ class SessionLogger:
         }
         if usage:
             record["usage"] = usage
+        if safety:
+            record["safety"] = safety
         self._records.append(record)
         with open(self._log_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")

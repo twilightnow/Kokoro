@@ -3,7 +3,7 @@ use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
     utils::config::Color,
-    AppHandle, Manager, Runtime, WebviewUrl, WebviewWindowBuilder,
+    AppHandle, Manager, PhysicalPosition, Runtime, WebviewUrl, WebviewWindowBuilder,
 };
 
 use crate::diagnostics::report_client_log;
@@ -156,6 +156,32 @@ pub fn show_or_create_admin_window<R: Runtime>(app: &AppHandle<R>) -> Result<(),
     Ok(())
 }
 
+fn center_main_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main window not found".to_string())?;
+    let window_size = window.outer_size().map_err(|e| e.to_string())?;
+    let monitor = window
+        .current_monitor()
+        .map_err(|e| e.to_string())?
+        .or_else(|| window.primary_monitor().ok().flatten())
+        .ok_or_else(|| "monitor not found".to_string())?;
+    let monitor_pos = monitor.position();
+    let monitor_size = monitor.size();
+    let x = monitor_pos.x + ((monitor_size.width as i32 - window_size.width as i32) / 2);
+    let y = monitor_pos.y + ((monitor_size.height as i32 - window_size.height as i32) / 2);
+
+    window.show().map_err(|e| e.to_string())?;
+    window
+        .set_position(PhysicalPosition::new(x, y))
+        .map_err(|e| e.to_string())?;
+    let persist_position_script = format!(
+        "localStorage.setItem('kokoro-window-position', JSON.stringify({{ x: {x}, y: {y} }}));"
+    );
+    let _ = window.eval(&persist_position_script);
+    window.set_focus().map_err(|e| e.to_string())
+}
+
 fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, id: &str) {
     match id {
         "admin" => {
@@ -192,6 +218,23 @@ fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, id: &str) {
                 }
             }
         }
+        "center-main" => {
+            report_client_log(
+                "tauri-tray",
+                "center-main-menu-click",
+                "info",
+                "tray center main window menu item clicked",
+            );
+            if let Err(e) = center_main_window(app) {
+                report_client_log(
+                    "tauri-tray",
+                    "center-main-error",
+                    "error",
+                    &format!("failed to center main window from tray: {e}"),
+                );
+                eprintln!("failed to center main window: {e}");
+            }
+        }
         _ => {}
     }
 }
@@ -199,9 +242,10 @@ fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, id: &str) {
 pub fn setup_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let admin_i = MenuItem::with_id(app, "admin", "管理界面", true, None::<&str>)?;
     let toggle_i = MenuItem::with_id(app, "toggle", "显示 / 隐藏", true, None::<&str>)?;
+    let center_i = MenuItem::with_id(app, "center-main", "重置角色到屏幕中央", true, None::<&str>)?;
     let quit_i = MenuItem::with_id(app, "quit", "退出 Kokoro", true, None::<&str>)?;
 
-    let menu = Menu::with_items(app, &[&admin_i, &toggle_i, &quit_i])?;
+    let menu = Menu::with_items(app, &[&admin_i, &toggle_i, &center_i, &quit_i])?;
 
     TrayIconBuilder::new()
         .icon(app.default_window_icon().unwrap().clone())

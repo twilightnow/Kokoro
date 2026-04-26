@@ -55,6 +55,21 @@
       </div>
 
       <div class="card mt-4">
+        <div class="card-title">成本估算</div>
+        <div class="grid-2">
+          <div class="form-group">
+            <label class="form-label">输入价格 (PRICE_INPUT)</label>
+            <input type="number" v-model="updates.PRICE_INPUT" min="0" step="0.01" placeholder="元 / 1M tokens" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">输出价格 (PRICE_OUTPUT)</label>
+            <input type="number" v-model="updates.PRICE_OUTPUT" min="0" step="0.01" placeholder="元 / 1M tokens" />
+          </div>
+        </div>
+        <div class="hint">留空表示不展示会话成本估算；这里只做前端实时估算，不内置价格表。</div>
+      </div>
+
+      <div class="card mt-4">
         <div class="card-title">TTS 语音</div>
         <div class="form-group inline-check">
           <label>
@@ -85,13 +100,14 @@
       </div>
 
       <div class="card mt-4">
-        <div class="card-title">桌面行为</div>
-        <div class="settings-list">
-          <label><input type="checkbox" v-model="startOnBoot" /> 开机启动</label>
-          <label><input type="checkbox" v-model="mainAlwaysOnTop" /> 主窗口默认置顶</label>
-          <label><input type="checkbox" v-model="enablePerception" /> 启用感知能力</label>
+        <div class="card-title">感知采集</div>
+        <div class="form-group inline-check">
+          <label>
+            <input type="checkbox" v-model="perceptionEnabled" />
+            启用窗口标题、输入活跃和时间段感知
+          </label>
         </div>
-        <div class="hint">感知默认关闭；开机启动会写入当前 Windows 用户的启动项。</div>
+        <div class="hint">此开关控制采集链路，保存后需要重启 sidecar 生效；隐私过滤和勿扰规则在“感知隐私”页面管理。</div>
       </div>
 
       <!-- 记忆配置 -->
@@ -124,7 +140,7 @@
       </div>
 
       <div v-if="restartRequired" class="banner-warn mt-4">
-        ⚠️ 包含需要重启 Sidecar 才能生效的配置项（KOKORO_DATA_DIR）。
+        ⚠️ 包含需要重启 Sidecar 才能生效的配置项（KOKORO_DATA_DIR / KOKORO_ENABLE_PERCEPTION）。
       </div>
 
       <!-- 当前完整 .env 路径 -->
@@ -147,24 +163,22 @@ const error = ref('')
 const saving = ref(false)
 const restartRequired = ref(false)
 const ttsEnabled = ref(true)
-const startOnBoot = ref(false)
-const mainAlwaysOnTop = ref(true)
-const enablePerception = ref(false)
+const perceptionEnabled = ref(false)
 
 // 可编辑的配置键
 const updates = ref<Record<string, string>>({
   LLM_PROVIDER: '',
   LLM_MODEL: '',
   LLM_MAX_TOKENS: '300',
+  PRICE_INPUT: '',
+  PRICE_OUTPUT: '',
   TTS_PROVIDER: 'edge-tts',
   TTS_VOICE: 'zh-CN-XiaoxiaoNeural',
   TTS_RATE: '+0%',
   TTS_VOLUME: '+0%',
+  KOKORO_ENABLE_PERCEPTION: '0',
   MEMORY_TOKEN_BUDGET: '500',
   KOKORO_DATA_DIR: './data',
-  KOKORO_START_ON_BOOT: '0',
-  KOKORO_ALWAYS_ON_TOP: '1',
-  KOKORO_ENABLE_PERCEPTION: '0',
   ANTHROPIC_API_KEY: '',
   OPENAI_API_KEY: '',
   GEMINI_API_KEY: '',
@@ -183,6 +197,7 @@ const apiKeyMap: Record<string, string> = {
 }
 
 const cliProviders = new Set(['claude-cli', 'gemini-cli', 'codex-cli'])
+const clearableOptionalKeys = new Set(['PRICE_INPUT', 'PRICE_OUTPUT'])
 const isApiKeyProvider = computed(() => !cliProviders.has(updates.value.LLM_PROVIDER))
 const apiKeyEnvName = computed(() => apiKeyMap[updates.value.LLM_PROVIDER] ?? 'LLM_API_KEY')
 const apiKeyIsSet = computed(() => {
@@ -198,13 +213,13 @@ async function loadConfig() {
     // 填入当前值
     for (const entry of configData.value.entries) {
       if (entry.key in updates.value && !entry.is_sensitive) {
-        updates.value[entry.key] = entry.value
+        updates.value[entry.key] = String(entry.value ?? '')
       }
     }
-    startOnBoot.value = updates.value.KOKORO_START_ON_BOOT === '1'
-    mainAlwaysOnTop.value = updates.value.KOKORO_ALWAYS_ON_TOP !== '0'
-    enablePerception.value = updates.value.KOKORO_ENABLE_PERCEPTION === '1'
     ttsEnabled.value = updates.value.TTS_PROVIDER !== 'disabled'
+    perceptionEnabled.value = ['1', 'true', 'yes', 'on'].includes(
+      String(updates.value.KOKORO_ENABLE_PERCEPTION).toLowerCase(),
+    )
   } catch (e: any) {
     error.value = e.message
   } finally {
@@ -213,13 +228,12 @@ async function loadConfig() {
 }
 
 function buildPayload(): Record<string, string> {
-  updates.value.KOKORO_START_ON_BOOT = startOnBoot.value ? '1' : '0'
-  updates.value.KOKORO_ALWAYS_ON_TOP = mainAlwaysOnTop.value ? '1' : '0'
-  updates.value.KOKORO_ENABLE_PERCEPTION = enablePerception.value ? '1' : '0'
   updates.value.TTS_PROVIDER = ttsEnabled.value ? 'edge-tts' : 'disabled'
+  updates.value.KOKORO_ENABLE_PERCEPTION = perceptionEnabled.value ? '1' : '0'
   const payload: Record<string, string> = {}
   for (const [k, v] of Object.entries(updates.value)) {
-    if (v !== '') payload[k] = v
+    const normalized = typeof v === 'string' ? v : String(v ?? '')
+    if (normalized !== '' || clearableOptionalKeys.has(k)) payload[k] = normalized
   }
   // 敏感 key 留空表示不修改，移除
   for (const k of Object.values(apiKeyMap)) {
@@ -235,7 +249,7 @@ async function saveConfig() {
   restartRequired.value = false
   try {
     const r = await api.updateConfig(buildPayload())
-    applyDesktopPreferences()
+    localStorage.setItem('kokoro-tts-enabled', ttsEnabled.value ? '1' : '0')
     restartRequired.value = r.restart_required
     showToast('配置已保存', 'success')
   } catch (e: any) {
@@ -249,7 +263,7 @@ async function saveAndReload() {
   saving.value = true
   try {
     const r = await api.updateConfig(buildPayload())
-    applyDesktopPreferences()
+    localStorage.setItem('kokoro-tts-enabled', ttsEnabled.value ? '1' : '0')
     restartRequired.value = r.restart_required
     await api.reloadConfig()
     showToast('配置已保存并热更新', 'success')
@@ -258,16 +272,6 @@ async function saveAndReload() {
   } finally {
     saving.value = false
   }
-}
-
-function applyDesktopPreferences() {
-  localStorage.setItem('kokoro-main-always-on-top', mainAlwaysOnTop.value ? '1' : '0')
-  localStorage.setItem('kokoro-tts-enabled', ttsEnabled.value ? '1' : '0')
-  import('@tauri-apps/api/core')
-    .then(({ invoke }) => invoke('set_start_on_boot', { enabled: startOnBoot.value }))
-    .catch(() => {
-      showToast('开机启动设置未写入系统启动项', 'error')
-    })
 }
 
 async function testLlm() {
@@ -306,12 +310,6 @@ onMounted(loadConfig)
   color: #6b7280;
   font-size: 11px;
   line-height: 1.5;
-}
-
-.settings-list {
-  display: grid;
-  gap: 8px;
-  font-size: 13px;
 }
 
 .inline-check {

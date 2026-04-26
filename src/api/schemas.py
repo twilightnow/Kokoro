@@ -14,6 +14,30 @@ class UsageInfo(BaseModel):
     model: str = ""
 
 
+class SafetySummary(BaseModel):
+    level: str = "none"
+    action: str = "allow"
+    reason: str = ""
+    rule_names: List[str] = Field(default_factory=list)
+    relationship_type: str = ""
+    replaced: bool = False
+
+
+class EmotionSummaryResponse(BaseModel):
+    mood: str = "normal"
+    keyword: str = ""
+    reason: str = ""
+    source: str = ""
+    intensity: float = 0.0
+    recovery_rate: float = 0.2
+    started_at_turn: int = 0
+    elapsed_turns: int = 0
+    estimated_remaining_turns: int = 0
+    phase: str = "idle"
+    rate_delta: str = ""
+    volume_delta: str = ""
+
+
 class ChatResponse(BaseModel):
     reply: str
     mood: str
@@ -21,6 +45,8 @@ class ChatResponse(BaseModel):
     flagged: bool
     turn: int
     usage: Optional[UsageInfo] = None
+    emotion: Optional[EmotionSummaryResponse] = None
+    safety: Optional[SafetySummary] = None
 
 
 class Live2DDisplayConfig(BaseModel):
@@ -30,6 +56,13 @@ class Live2DDisplayConfig(BaseModel):
     offset_y: float = 0.0
     idle_group: str = "Idle"
     mood_motions: Dict[str, str] = Field(default_factory=dict)
+
+
+class ImageDisplayConfig(BaseModel):
+    image_url: str
+    scale: float = 1.0
+    offset_x: float = 0.0
+    offset_y: float = 0.0
 
 
 class Model3DVector3(BaseModel):
@@ -95,11 +128,26 @@ class CharacterDisplayConfig(BaseModel):
     mode: str = "placeholder"
     live2d: Optional[Live2DDisplayConfig] = None
     model3d: Optional[Model3DDisplayConfig] = None
+    image: Optional[ImageDisplayConfig] = None
 
 
 class SessionTokenTotal(BaseModel):
     input: int = 0
     output: int = 0
+
+
+class RelationshipStateSnapshot(BaseModel):
+    intimacy: int = 0
+    trust: int = 0
+    familiarity: int = 0
+    interaction_quality_recent: int = 0
+    preferred_addressing: str = ""
+    relationship_type: str = "friend"
+    boundaries_summary: str = ""
+    dependency_risk: int = 0
+    boundary_policy_summary: str = ""
+    updated_at: str = ""
+    change_reasons: List[str] = Field(default_factory=list)
 
 
 class StateResponse(BaseModel):
@@ -111,7 +159,9 @@ class StateResponse(BaseModel):
     turn: int
     memory_summary_count: int
     memory_fact_count: int
+    relationship: RelationshipStateSnapshot = Field(default_factory=RelationshipStateSnapshot)
     session_token_total: Optional[SessionTokenTotal] = None
+    emotion: EmotionSummaryResponse = Field(default_factory=EmotionSummaryResponse)
 
 
 class HealthResponse(BaseModel):
@@ -142,8 +192,15 @@ class TTSRequest(BaseModel):
 class StreamChunk(BaseModel):
     type: str
     content: str
+    id: Optional[str] = None
+    level: Optional[str] = None
+    scene: Optional[str] = None
+    expression: Optional[str] = None
+    actions: Optional[List[str]] = None
     mood: Optional[str] = None
     flagged: Optional[bool] = None
+    emotion: Optional[EmotionSummaryResponse] = None
+    safety: Optional[SafetySummary] = None
 
 
 Model3DSkinConfig.model_rebuild()

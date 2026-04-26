@@ -45,5 +45,5 @@ updated: 2026-04-24
 
 ## 相关设计文档
 
-- [UI 层](../../desgin/UI层.md)
-- [3D 模型支持](../../desgin/3d-model-support.md)
+- [UI 层](../../desgin/06-UI层.md)
+- [3D 模型支持](../../desgin/09-3d-model-support.md)

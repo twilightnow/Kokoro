@@ -6,6 +6,8 @@ from urllib.parse import quote
 
 import yaml
 
+_DISPLAY_MODES = {"placeholder", "live2d", "model3d", "image"}
+
 
 def _default_characters_dir() -> Path:
     bundled_root = getattr(sys, "_MEIPASS", None)
@@ -64,6 +66,33 @@ def _model3d_root(character_id: str, manifest: dict[str, Any]) -> Path:
     return _resolve_within(_characters_root(), _character_dir(character_id) / root_value)
 
 
+def _image_root(character_id: str, manifest: dict[str, Any]) -> Path:
+    display = manifest.get("display", {})
+    image = display.get("image", {})
+    root_value = image.get("root", ".")
+    if not isinstance(root_value, str) or not root_value.strip():
+        raise ValueError("image.root is missing")
+    return _resolve_within(_characters_root(), _character_dir(character_id) / root_value)
+
+
+def _candidate_display_modes(display: dict[str, Any]) -> list[str]:
+    requested_mode = str(display.get("mode") or "placeholder")
+    candidate_modes = [requested_mode]
+    if requested_mode != "image" and isinstance(display.get("image"), dict):
+        candidate_modes.append("image")
+    return candidate_modes
+
+
+def _asset_root_for_mode(character_id: str, manifest: dict[str, Any], mode: str) -> Path:
+    if mode == "live2d":
+        return _live2d_root(character_id, manifest)
+    if mode == "model3d":
+        return _model3d_root(character_id, manifest)
+    if mode == "image":
+        return _image_root(character_id, manifest)
+    raise ValueError(f"unsupported display mode: {mode}")
+
+
 def _asset_url(character_id: str, asset_path: str, base_url: str) -> str:
     normalized = asset_path.replace("\\", "/")
     return f"{base_url.rstrip('/')}/character-assets/{quote(character_id)}/{quote(normalized)}"
@@ -89,17 +118,17 @@ def _vector3(value: Any, default: tuple[float, float, float]) -> dict[str, float
 def resolve_character_asset(character_id: str, asset_path: str) -> Path:
     manifest = load_manifest(character_id)
     display = manifest.get("display", {})
-    mode = display.get("mode")
-    if mode == "live2d":
-        asset_root = _live2d_root(character_id, manifest)
-    elif mode == "model3d":
-        asset_root = _model3d_root(character_id, manifest)
-    else:
-        raise ValueError(f"character {character_id} does not expose asset mode: {mode}")
-    file_path = _resolve_within(asset_root, asset_root / asset_path)
-    if not file_path.exists() or not file_path.is_file():
-        raise FileNotFoundError(file_path)
-    return file_path
+    errors: list[str] = []
+    for mode in _candidate_display_modes(display if isinstance(display, dict) else {}):
+        try:
+            asset_root = _asset_root_for_mode(character_id, manifest, mode)
+            file_path = _resolve_within(asset_root, asset_root / asset_path)
+            if file_path.exists() and file_path.is_file():
+                return file_path
+            errors.append(str(file_path))
+        except ValueError as exc:
+            errors.append(str(exc))
+    raise FileNotFoundError("; ".join(errors) if errors else asset_path)
 
 
 def _build_live2d_display(character_id: str, base_url: str, display: dict[str, Any]) -> dict[str, Any]:
@@ -107,11 +136,11 @@ def _build_live2d_display(character_id: str, base_url: str, display: dict[str, A
     asset_root = _live2d_root(character_id, load_manifest(character_id))
     model_file = live2d.get("model")
     if not isinstance(model_file, str) or not model_file.strip():
-        return {"mode": "placeholder"}
+        raise ValueError("live2d.model is missing")
 
     model_path = _resolve_within(asset_root, asset_root / model_file)
     if not model_path.exists() or not model_path.is_file():
-        return {"mode": "placeholder"}
+        raise FileNotFoundError(model_path)
 
     return {
         "mode": "live2d",
@@ -134,7 +163,7 @@ def _build_model3d_display(character_id: str, base_url: str, display: dict[str, 
     asset_root = _model3d_root(character_id, load_manifest(character_id))
     raw_skins = model3d.get("skins", {}) or {}
     if not isinstance(raw_skins, dict):
-        return {"mode": "placeholder"}
+        raise ValueError("model3d.skins is missing or invalid")
 
     skins: dict[str, Any] = {}
     for skin_id, raw_skin in raw_skins.items():
@@ -265,7 +294,7 @@ def _build_model3d_display(character_id: str, base_url: str, display: dict[str, 
         }
 
     if not skins:
-        return {"mode": "placeholder"}
+        raise ValueError("model3d has no valid skins")
 
     requested_order = model3d.get("skin_order")
     ordered_skin_ids: list[str] = []
@@ -305,13 +334,100 @@ def _build_model3d_display(character_id: str, base_url: str, display: dict[str, 
     }
 
 
-def build_character_display(character_id: str, base_url: str) -> dict[str, Any]:
-    manifest = load_manifest(character_id)
-    display = manifest.get("display", {})
-    mode = display.get("mode")
+def _build_image_display(character_id: str, base_url: str, display: dict[str, Any]) -> dict[str, Any]:
+    image = display.get("image", {})
+    asset_root = _image_root(character_id, load_manifest(character_id))
+    image_file = image.get("file")
+    if not isinstance(image_file, str) or not image_file.strip():
+        raise ValueError("image.file is missing")
+
+    image_path = _resolve_within(asset_root, asset_root / image_file)
+    if not image_path.exists() or not image_path.is_file():
+        raise FileNotFoundError(image_path)
+
+    return {
+        "mode": "image",
+        "image": {
+            "image_url": _asset_url(character_id, image_file, base_url),
+            "scale": _as_float(image.get("scale"), 1.0),
+            "offset_x": _as_float(image.get("offset_x"), 0.0),
+            "offset_y": _as_float(image.get("offset_y"), 0.0),
+        },
+    }
+
+
+def _build_display_for_mode(
+    character_id: str,
+    base_url: str,
+    display: dict[str, Any],
+    mode: str,
+) -> dict[str, Any]:
     if mode == "live2d":
         return _build_live2d_display(character_id, base_url, display)
     if mode == "model3d":
         return _build_model3d_display(character_id, base_url, display)
+    if mode == "image":
+        return _build_image_display(character_id, base_url, display)
+    if mode == "placeholder":
+        return {"mode": "placeholder"}
+    raise ValueError(f"unsupported display mode: {mode}")
+
+
+def validate_character_manifest(character_id: str) -> dict[str, Any]:
+    manifest = load_manifest(character_id)
+    display = manifest.get("display", {}) if isinstance(manifest, dict) else {}
+    if not isinstance(display, dict) or not display:
+        return {
+            "requested_mode": "placeholder",
+            "resolved_mode": "placeholder",
+            "warnings": ["manifest.yaml 未配置 display，已使用占位显示"],
+            "errors": [],
+        }
+
+    requested_mode = str(display.get("mode") or "placeholder")
+    if requested_mode not in _DISPLAY_MODES:
+        return {
+            "requested_mode": requested_mode,
+            "resolved_mode": "placeholder",
+            "warnings": [],
+            "errors": [f"display.mode 不支持: {requested_mode}"],
+        }
+
+    attempt_errors: list[str] = []
+    for mode in _candidate_display_modes(display):
+        try:
+            _build_display_for_mode(character_id, "http://localhost", display, mode)
+            warnings: list[str] = []
+            errors: list[str] = []
+            if mode != requested_mode and attempt_errors:
+                warnings.append(
+                    f"{requested_mode} 资源不可用，已可降级为 {mode}"
+                )
+                warnings.extend(attempt_errors)
+            return {
+                "requested_mode": requested_mode,
+                "resolved_mode": mode,
+                "warnings": warnings,
+                "errors": errors,
+            }
+        except (FileNotFoundError, ValueError) as exc:
+            attempt_errors.append(f"{mode}: {exc}")
+
+    return {
+        "requested_mode": requested_mode,
+        "resolved_mode": "placeholder",
+        "warnings": [],
+        "errors": attempt_errors,
+    }
+
+
+def build_character_display(character_id: str, base_url: str) -> dict[str, Any]:
+    manifest = load_manifest(character_id)
+    display = manifest.get("display", {})
+    for candidate_mode in _candidate_display_modes(display if isinstance(display, dict) else {}):
+        try:
+            return _build_display_for_mode(character_id, base_url, display, candidate_mode)
+        except (FileNotFoundError, ValueError):
+            continue
 
     return {"mode": "placeholder"}

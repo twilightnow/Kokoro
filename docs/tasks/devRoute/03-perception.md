@@ -5,7 +5,7 @@ tags:
   - perception
 status: done
 created: 2026-04-21
-updated: 2026-04-24
+updated: 2026-04-26
 ---
 
 # Phase 2B — 轻感知 ✅
@@ -23,12 +23,11 @@ updated: 2026-04-24
 ## 任务清单
 
 - [x] **`PerceptionCollector`**（`collector.py`）：整合 `WindowMonitor`（pygetwindow）+ `InputTracker`（pynput）采集窗口标题、活跃状态、时间段
-- [x] **`BaseTrigger` 抽象与五类触发器**：`IdleTrigger`（空闲 2h）、`LateNightTrigger`（23:00-04:00）、`LongWorkTrigger`（连续工作 1h）、`WindowSwitchTrigger`（频繁切窗口 ≥10 次/分钟）、`GamingTrigger`（窗口标题关键词匹配）
-- [x] **冷却机制**（`CooldownManager`）：全局冷却 30 分钟，同类触发器冷却期内不重复触发
 - [x] **感知上下文注入 prompt**：`PromptContext.perception` 字段接入主流程，不为 None 时追加"当前场景"段
-- [x] **感知日志**（`PerceptionLog`）：每次触发主动介入时写入日志
 - [x] **游戏粗判**：`WindowMonitor.GAME_KEYWORDS` 关键词匹配，命中时场景标签为 `gaming`
-- [x] **`ProactiveEngine`** 整合以上全部，通过 `ConversationService(enable_perception=True)` 接入主流程
+- [x] **`ProactiveSignalDetector` + `CompanionRuntime`**：由后台 loop 在 sidecar 模式下完成信号检测、抑制与主动广播
+- [x] **主动策略持久化**：`ProactiveSettingsRepository`、`ProactivePolicy`、`ProactiveLogRepository` 接管模式、勿扰、每日上限与事件日志
+- [x] **CLI `--perception` 收口**：`ConversationService(enable_perception=True)` 仅按轮采集最新快照注入 prompt，不再承担轮间主动开口
 
 ## 验收标准
 
@@ -38,4 +37,4 @@ updated: 2026-04-24
 
 ## 相关设计文档
 
-- [感知层](../../desgin/感知层.md)
+- [感知层](../../desgin/04-感知层.md)

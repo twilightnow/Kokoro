@@ -7,6 +7,7 @@ FastAPI 应用入口。
   - CORS 配置（Tauri 前端本地访问）
 """
 import asyncio
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncGenerator, Optional
@@ -16,7 +17,10 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from ..application.conversation_service import ConversationService
 from ..character_defaults import CHARACTERS_DIR, resolve_default_character_path
-from .service_registry import get_service, set_service, switch_character  # noqa: F401 — re-exported
+from ..runtime.companion_runtime import CompanionRuntime
+from .schemas import StreamChunk
+from .service_registry import get_service, get_runtime, set_runtime, set_service, switch_character  # noqa: F401 — re-exported
+from .stream_manager import get_stream_manager
 
 # 全局服务实例（单例，lifespan 管理）
 _CHARACTER_PATH: Optional[Path] = None
@@ -39,15 +43,48 @@ def _resolve_initial_character_path() -> Path:
     return resolve_default_character_path()
 
 
+def _env_flag_enabled(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator:
     svc = ConversationService(
         character_path=_resolve_initial_character_path(),
-        enable_perception=False,
+        enable_perception=_env_flag_enabled("KOKORO_ENABLE_PERCEPTION"),
+    )
+    runtime = CompanionRuntime(
+        get_service=get_service,
+        publish=_broadcast_proactive_action,
     )
     set_service(svc)
-    yield
-    set_service(None)  # 清理
+    set_runtime(runtime)
+    await runtime.start()
+    try:
+        yield
+    finally:
+        await runtime.stop()
+        await asyncio.to_thread(svc._on_session_end)
+        set_service(None)  # 清理
+        set_runtime(None)
+
+
+async def _broadcast_proactive_action(action) -> None:
+    chunk = StreamChunk(
+        type="proactive",
+        content=action.content,
+        id=action.id,
+        level=action.level,
+        scene=action.scene,
+        expression=action.expression,
+        actions=action.actions,
+        mood=action.expression,
+        emotion=action.metadata.get("emotion") or None,
+    )
+    await get_stream_manager().broadcast(chunk.model_dump_json())
 
 
 def create_app() -> FastAPI:
@@ -67,6 +104,7 @@ def create_app() -> FastAPI:
             "http://localhost:5173",   # Vite dev server
             "http://127.0.0.1:5173",
         ],
+        allow_origin_regex=r"https?://(localhost|127\\.0\\.0\\.1)(:\\d+)?$",
         allow_methods=["*"],
         allow_headers=["*"],
     )

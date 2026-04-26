@@ -7,6 +7,8 @@ const props = defineProps<{
   config: Live2DDisplayConfig
   mood: Mood
   lipSyncLevel: number
+  visualScale?: number
+  visualOffset?: { x: number; y: number }
 }>()
 
 const hostRef = ref<HTMLDivElement | null>(null)
@@ -21,6 +23,13 @@ let model: Live2DModelInstance | null = null
 let resizeObserver: ResizeObserver | null = null
 let cubismStarted = false
 let naturalBounds = { x: 0, y: 0, width: 1, height: 1 }
+let resizeFrame = 0
+let resizeSettleTimer: ReturnType<typeof window.setTimeout> | null = null
+let rendererSize = { width: 0, height: 0, resolution: 0 }
+
+function getRenderResolution(): number {
+  return Math.min(Math.max(window.devicePixelRatio || 1, 2), 3)
+}
 
 function ensurePixiGlobal(): void {
   ;(window as Window & { PIXI?: typeof PIXI }).PIXI = PIXI
@@ -73,30 +82,69 @@ function measureModelBounds(): void {
   }
 }
 
-function fitModel(): void {
+function fitModel(commitRendererResize = true): void {
   if (!hostRef.value || !app || !model) return
 
-  const width = Math.max(hostRef.value.clientWidth, 1)
-  const height = Math.max(hostRef.value.clientHeight, 1)
-  app.renderer.resize(width, height)
+  const measuredWidth = Math.max(hostRef.value.clientWidth, 1)
+  const measuredHeight = Math.max(hostRef.value.clientHeight, 1)
+  const resolution = getRenderResolution()
+  const shouldResize = (
+    rendererSize.width !== measuredWidth ||
+    rendererSize.height !== measuredHeight ||
+    rendererSize.resolution !== resolution
+  )
+  if (commitRendererResize && shouldResize) {
+    if (app.renderer.resolution !== resolution) {
+      app.renderer.resolution = resolution
+    }
+    app.renderer.resize(measuredWidth, measuredHeight)
+    rendererSize = { width: measuredWidth, height: measuredHeight, resolution }
+  }
 
-  const usableWidth = width * 0.98
-  const usableHeight = height * 0.94
+  const layoutWidth = commitRendererResize
+    ? measuredWidth
+    : rendererSize.width || measuredWidth
+  const layoutHeight = commitRendererResize
+    ? measuredHeight
+    : rendererSize.height || measuredHeight
+  const usableWidth = layoutWidth * 1.02
+  const usableHeight = layoutHeight * 1.86
   const baseScale = Math.min(
     usableWidth / naturalBounds.width,
     usableHeight / naturalBounds.height,
   )
-  const visualScale = Math.max(baseScale * props.config.scale, 0.01)
+  const visualScale = Math.max(baseScale * props.config.scale * (props.visualScale ?? 1), 0.01)
 
   model.scale.set(visualScale)
   model.pivot.set(
     naturalBounds.x + naturalBounds.width / 2,
     naturalBounds.y + naturalBounds.height / 2,
   )
+  const upperBodyBias = naturalBounds.height * visualScale * 0.19
   model.position.set(
-    width / 2 + props.config.offset_x,
-    height / 2 + props.config.offset_y - height * 0.02,
+    layoutWidth / 2 + props.config.offset_x + (props.visualOffset?.x ?? 0),
+    layoutHeight / 2 + props.config.offset_y + upperBodyBias + (props.visualOffset?.y ?? 0),
   )
+}
+
+function scheduleFitModel(commitRendererResize = true): void {
+  if (resizeFrame) {
+    return
+  }
+  resizeFrame = window.requestAnimationFrame(() => {
+    resizeFrame = 0
+    fitModel(commitRendererResize)
+  })
+}
+
+function scheduleResizeSettle(): void {
+  if (resizeSettleTimer !== null) {
+    window.clearTimeout(resizeSettleTimer)
+  }
+  resizeSettleTimer = window.setTimeout(() => {
+    resizeSettleTimer = null
+    fitModel(true)
+  }, 140)
 }
 
 async function playMotion(group?: string): Promise<void> {
@@ -137,13 +185,19 @@ async function mountModel(): Promise<void> {
   await ensureCubismReady()
 
   if (!app) {
+    const width = Math.max(hostRef.value.clientWidth, 1)
+    const height = Math.max(hostRef.value.clientHeight, 1)
+    const resolution = getRenderResolution()
     app = new PIXI.Application({
-      width: Math.max(hostRef.value.clientWidth, 1),
-      height: Math.max(hostRef.value.clientHeight, 1),
+      width,
+      height,
       backgroundAlpha: 0,
       antialias: true,
+      autoDensity: true,
       autoStart: true,
+      resolution,
     })
+    rendererSize = { width, height, resolution }
     canvasRef.value?.replaceChildren(app.view)
   }
 
@@ -176,7 +230,10 @@ onMounted(async () => {
   await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
   await remount()
   if (hostRef.value) {
-    resizeObserver = new ResizeObserver(() => fitModel())
+    resizeObserver = new ResizeObserver(() => {
+      scheduleFitModel(false)
+      scheduleResizeSettle()
+    })
     resizeObserver.observe(hostRef.value)
   }
 })
@@ -189,7 +246,14 @@ watch(
 )
 
 watch(
-  () => [props.config.scale, props.config.offset_x, props.config.offset_y],
+  () => [
+    props.config.scale,
+    props.config.offset_x,
+    props.config.offset_y,
+    props.visualScale,
+    props.visualOffset?.x,
+    props.visualOffset?.y,
+  ],
   () => {
     fitModel()
   },
@@ -213,6 +277,14 @@ watch(
 )
 
 onBeforeUnmount(() => {
+  if (resizeFrame) {
+    window.cancelAnimationFrame(resizeFrame)
+    resizeFrame = 0
+  }
+  if (resizeSettleTimer !== null) {
+    window.clearTimeout(resizeSettleTimer)
+    resizeSettleTimer = null
+  }
   resizeObserver?.disconnect()
   resizeObserver = null
   if (model && app) {
@@ -221,6 +293,7 @@ onBeforeUnmount(() => {
     model = null
   }
   naturalBounds = { x: 0, y: 0, width: 1, height: 1 }
+  rendererSize = { width: 0, height: 0, resolution: 0 }
   app?.destroy(true, { children: true })
   app = null
 })

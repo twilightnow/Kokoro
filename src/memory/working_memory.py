@@ -21,6 +21,9 @@ class WorkingMemory:
         if len(self._history) >= self._max_messages:
             self._history = self._history[-(self._max_messages - 2) :]
 
+    def would_truncate(self) -> bool:
+        return len(self._history) >= self._max_messages
+
     def get_messages(self) -> List[Dict[str, str]]:
         return list(self._history)
 

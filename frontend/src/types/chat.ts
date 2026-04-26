@@ -1,4 +1,20 @@
 export type Mood = string
+export type ProactiveLevel = 'silent' | 'expression' | 'short' | 'full'
+
+export interface EmotionSummary {
+  mood: Mood
+  keyword: string
+  reason: string
+  source: string
+  intensity: number
+  recovery_rate: number
+  started_at_turn: number
+  elapsed_turns: number
+  estimated_remaining_turns: number
+  phase: 'idle' | 'triggered' | 'steady' | 'recovering' | string
+  rate_delta: string
+  volume_delta: string
+}
 
 export interface Live2DDisplayConfig {
   model_url: string
@@ -7,6 +23,13 @@ export interface Live2DDisplayConfig {
   offset_y: number
   idle_group: string
   mood_motions: Record<string, string>
+}
+
+export interface ImageDisplayConfig {
+  image_url: string
+  scale: number
+  offset_x: number
+  offset_y: number
 }
 
 export interface Model3DVector3 {
@@ -72,9 +95,10 @@ export interface Model3DDisplayConfig {
 }
 
 export interface CharacterDisplayConfig {
-  mode: 'placeholder' | 'live2d' | 'model3d' | string
+  mode: 'placeholder' | 'live2d' | 'model3d' | 'image' | string
   live2d?: Live2DDisplayConfig
   model3d?: Model3DDisplayConfig
+  image?: ImageDisplayConfig
 }
 
 export interface ChatState {
@@ -86,6 +110,12 @@ export interface ChatState {
 export interface StreamChunk {
   type: 'thinking' | 'token' | 'done' | 'error' | 'proactive'
   content: string
+  id?: string
+  level?: ProactiveLevel
+  scene?: string
+  expression?: Mood
+  actions?: string[]
   mood?: Mood
   flagged?: boolean
+  emotion?: EmotionSummary
 }

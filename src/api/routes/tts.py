@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, Response
 
-from ...capability.tts import create_tts_client
+from ...capability.tts import TTSDisabledError, create_tts_client
 from ..schemas import TTSRequest
 
 router = APIRouter(tags=["tts"])
@@ -15,6 +15,8 @@ async def synthesize_tts(body: TTSRequest) -> Response:
             volume=body.volume,
         )
         result = await client.synthesize(body.text)
+    except TTSDisabledError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except EnvironmentError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:

@@ -1,5 +1,5 @@
 use serde::Serialize;
-use tauri::{AppHandle, Manager, PhysicalPosition, Runtime};
+use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize, Runtime};
 
 use crate::diagnostics::report_client_log;
 use crate::tray::show_or_create_admin_window;
@@ -51,6 +51,19 @@ pub fn set_window_position<R: Runtime>(app: AppHandle<R>, x: i32, y: i32) -> Res
         .get_webview_window("main")
         .ok_or_else(|| "Window not found".to_string())?;
     win.set_position(PhysicalPosition::new(x, y))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn set_main_window_size<R: Runtime>(
+    app: AppHandle<R>,
+    width: u32,
+    height: u32,
+) -> Result<(), String> {
+    let win = app
+        .get_webview_window("main")
+        .ok_or_else(|| "Window not found".to_string())?;
+    win.set_size(PhysicalSize::new(width.max(280), height.max(420)))
         .map_err(|e| e.to_string())
 }
 

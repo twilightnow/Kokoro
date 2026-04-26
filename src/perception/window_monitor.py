@@ -36,6 +36,14 @@ class WindowMonitor:
         except Exception:
             return ""
 
+    def current_app_name(self) -> str:
+        """获取当前应用名。当前依赖不保证可用，失败时返回空字符串。"""
+        return ""
+
+    def is_fullscreen(self) -> bool:
+        """粗判当前窗口是否全屏。当前依赖不保证可用，失败时返回 False。"""
+        return False
+
     def record_switch(self, title: str) -> None:
         """记录一次窗口切换。"""
         self._switch_history.append((time.monotonic(), title))

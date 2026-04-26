@@ -7,6 +7,7 @@
     "dev": "chcp 65001>nul && concurrently -n vite,tauri -c cyan,green --kill-others-on-fail \"npm run frontend:dev\" \"npm run tauri:dev\"",
     "sidecar": "chcp 65001>nul && set PYTHONUTF8=1&& python -X utf8 -m src.api.server",
     "sidecar:build": "chcp 65001>nul && powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build_sidecar.ps1",
+    "desktop:build-assets": "chcp 65001>nul && npm run build --prefix frontend && npm run sidecar:build",
     "dev:kill": "chcp 65001>nul && powershell -NoProfile -ExecutionPolicy Bypass -File scripts/kill_dev_processes.ps1",
     "dev:all": "chcp 65001>nul && concurrently -n sidecar,vite,tauri -c yellow,cyan,green --kill-others-on-fail \"npm run sidecar\" \"npm run frontend:dev\" \"npm run tauri:dev\""
   },

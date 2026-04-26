@@ -39,6 +39,7 @@
           <div class="stat-sub" :title="tokenTitle">
             累计 {{ formatTokens(totalTokens) }} Token
           </div>
+          <div v-if="estimatedCostLabel" class="stat-sub">{{ estimatedCostLabel }}</div>
         </div>
 
         <!-- 记忆状态 -->
@@ -48,6 +49,17 @@
           <div class="stat-sub">事实 {{ state.memory_fact_count }} 项</div>
           <button class="btn btn-secondary btn-sm mt-4" @click="$router.push('/memories')">
             查看记忆
+          </button>
+        </div>
+
+        <div class="card">
+          <div class="card-title">关系状态</div>
+          <div class="stat-value">{{ state.relationship?.relationship_type || 'friend' }}</div>
+          <div class="stat-sub">
+            信任 {{ state.relationship?.trust ?? 0 }} / 熟悉 {{ state.relationship?.familiarity ?? 0 }}
+          </div>
+          <button class="btn btn-secondary btn-sm mt-4" @click="$router.push('/relationship')">
+            查看关系
           </button>
         </div>
 
@@ -109,6 +121,7 @@ const showToast = inject<(msg: string, type?: any) => void>('showToast', () => {
 
 const state = ref<any>(null)
 const health = ref<any>(null)
+const pricing = ref<{ input: number | null, output: number | null }>({ input: null, output: null })
 const loading = ref(false)
 const error = ref('')
 const lastRefresh = ref<Date | null>(null)
@@ -130,6 +143,51 @@ const tokenTitle = computed(() => {
   if (!t) return ''
   return `Input: ${t.input ?? 0}  Output: ${t.output ?? 0}`
 })
+
+const estimatedCost = computed(() => {
+  const totals = state.value?.session_token_total
+  if (!totals) {
+    return null
+  }
+
+  const inputPrice = pricing.value.input ?? 0
+  const outputPrice = pricing.value.output ?? 0
+  if (!inputPrice && !outputPrice) {
+    return null
+  }
+
+  return ((totals.input ?? 0) * inputPrice + (totals.output ?? 0) * outputPrice) / 1_000_000
+})
+
+const estimatedCostLabel = computed(() => {
+  if (estimatedCost.value === null) {
+    return ''
+  }
+  return `≈ ¥${estimatedCost.value.toFixed(2)}`
+})
+
+function parsePrice(value: unknown): number | null {
+  if (value === '' || value === null || value === undefined) {
+    return null
+  }
+
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return null
+  }
+
+  return parsed
+}
+
+function syncPricing(configData: any): void {
+  const entries = Array.isArray(configData?.entries) ? configData.entries : []
+  const inputEntry = entries.find((entry: any) => entry.key === 'PRICE_INPUT')
+  const outputEntry = entries.find((entry: any) => entry.key === 'PRICE_OUTPUT')
+  pricing.value = {
+    input: parsePrice(inputEntry?.value),
+    output: parsePrice(outputEntry?.value),
+  }
+}
 
 function formatTokens(n: number) {
   if (n >= 1000) return `${(n / 1000).toFixed(1)}k`
@@ -153,7 +211,14 @@ async function refresh() {
   loading.value = true
   error.value = ''
   try {
-    ;[state.value, health.value] = await Promise.all([api.getState(), api.getHealth()])
+    const [nextState, nextHealth, configData] = await Promise.all([
+      api.getState(),
+      api.getHealth(),
+      api.getConfig().catch(() => null),
+    ])
+    state.value = nextState
+    health.value = nextHealth
+    syncPricing(configData)
     lastRefresh.value = new Date()
   } catch (e: any) {
     error.value = `连接失败: ${e.message}`

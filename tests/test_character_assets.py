@@ -9,7 +9,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.api.character_assets import build_character_display, resolve_character_asset
+from src.api.character_assets import build_character_display, resolve_character_asset, validate_character_manifest
 
 
 class TestCharacterAssets(unittest.TestCase):
@@ -115,6 +115,61 @@ class TestCharacterAssets(unittest.TestCase):
 
         self.assertTrue(path.exists())
         self.assertEqual(path.name, "firefly-combat.pmx")
+
+    def test_build_character_display_falls_back_to_image(self):
+        manifest = {
+            "display": {
+                "mode": "live2d",
+                "live2d": {
+                    "root": "live2d/runtime",
+                    "model": "missing.model3.json",
+                },
+                "image": {
+                    "root": "assets/portrait",
+                    "file": "idle.png",
+                    "scale": 1.1,
+                },
+            },
+        }
+        (self.character_dir / "manifest.yaml").write_text(
+            yaml.safe_dump(manifest, allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )
+        (self.character_dir / "assets" / "portrait").mkdir(parents=True, exist_ok=True)
+        (self.character_dir / "assets" / "portrait" / "idle.png").write_text("png", encoding="utf-8")
+
+        display = build_character_display("firefly", "http://localhost:18765")
+        validation = validate_character_manifest("firefly")
+
+        self.assertEqual(display["mode"], "image")
+        self.assertEqual(validation["resolved_mode"], "image")
+        self.assertTrue(validation["warnings"])
+
+    def test_resolve_character_asset_uses_fallback_image_root(self):
+        manifest = {
+            "display": {
+                "mode": "live2d",
+                "live2d": {
+                    "root": "live2d/runtime",
+                    "model": "missing.model3.json",
+                },
+                "image": {
+                    "root": "assets/portrait",
+                    "file": "idle.png",
+                },
+            },
+        }
+        (self.character_dir / "manifest.yaml").write_text(
+            yaml.safe_dump(manifest, allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )
+        (self.character_dir / "assets" / "portrait").mkdir(parents=True, exist_ok=True)
+        (self.character_dir / "assets" / "portrait" / "idle.png").write_text("png", encoding="utf-8")
+
+        path = resolve_character_asset("firefly", "idle.png")
+
+        self.assertTrue(path.exists())
+        self.assertEqual(path.name, "idle.png")
 
 
 if __name__ == "__main__":

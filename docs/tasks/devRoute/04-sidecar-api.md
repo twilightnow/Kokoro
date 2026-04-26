@@ -20,7 +20,7 @@ updated: 2026-04-24
 ## 任务清单
 
 - [x] **FastAPI 应用骨架**：`src/api/app.py`，lifespan 管理、CORS 配置
-- [ ] **IPC 协议文档**：定义 Tauri ↔ Python sidecar 的消息格式（见 `docs/desgin/IPC协议.md`，待完善）
+- [ ] **IPC 协议文档**：定义 Tauri ↔ Python sidecar 的消息格式（见 `docs/desgin/07-IPC协议.md`，待完善）
 - [x] **`POST /chat`**：接收用户输入，返回角色回复 + 当前情绪 + usage
 - [x] **`GET /state`**：返回当前情绪、活跃角色、记忆摘要条数、角色显示配置（display mode / 皮肤 URL）
 - [x] **`WebSocket /stream`**：长连接推送，同步 LLM + `asyncio.to_thread`；协议预留逐 token 扩展接口
@@ -39,5 +39,5 @@ updated: 2026-04-24
 
 ## 相关设计文档
 
-- [IPC 协议](../../desgin/IPC协议.md)
-- [管理界面](../../desgin/管理界面.md)
+- [IPC 协议](../../desgin/07-IPC协议.md)
+- [管理界面](../../desgin/08-管理界面.md)

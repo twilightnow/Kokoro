@@ -2,16 +2,16 @@
   <div>
     <h1 class="page-title">记忆浏览</h1>
 
-    <!-- 角色选择 -->
-    <div style="display:flex; align-items:center; gap:12px; margin-bottom:16px">
+    <div class="toolbar">
       <select v-model="activeChar" style="width:160px" @change="onCharChange">
         <option v-for="c in characters" :key="c.id" :value="c.id">{{ c.name }} ({{ c.id }})</option>
       </select>
+      <input v-model="searchText" class="search-input" placeholder="搜索 key、值或摘要" />
+      <button class="btn btn-secondary btn-sm" @click="exportMemories">导出记忆</button>
     </div>
 
     <div v-if="error" class="banner-error">{{ error }}</div>
 
-    <!-- Tabs -->
     <div class="tabs">
       <button
         v-for="tab in tabs"
@@ -22,16 +22,17 @@
       >{{ tab.label }}</button>
     </div>
 
-    <!-- 长期事实 -->
-    <div v-if="activeTab === 'facts'" class="card mt-4">
-      <div style="display:flex; justify-content:space-between; margin-bottom:12px">
-        <div class="card-title" style="margin:0">长期事实</div>
+    <div v-if="activeTab !== 'summaries'" class="card mt-4">
+      <div style="display:flex; justify-content:space-between; margin-bottom:12px; gap:12px; flex-wrap:wrap">
+        <div class="card-title" style="margin:0">{{ activeTabLabel }}</div>
         <button class="btn btn-primary btn-sm" @click="showAddFact = true">+ 新增</button>
       </div>
 
-      <!-- 新增表单 -->
       <div v-if="showAddFact" class="add-form">
-        <input v-model="newKey" placeholder="Key（如 user_name）" style="width:140px" />
+        <select v-model="newCategory" style="width:120px">
+          <option v-for="option in factCategories" :key="option.key" :value="option.key">{{ option.label }}</option>
+        </select>
+        <input v-model="newKey" placeholder="Key（如 user_name）" style="width:160px" />
         <input v-model="newValue" placeholder="Value" style="flex:1" />
         <button class="btn btn-primary btn-sm" @click="addFact">确认</button>
         <button class="btn btn-secondary btn-sm" @click="showAddFact=false">取消</button>
@@ -41,16 +42,26 @@
         <table>
           <thead>
             <tr>
-              <th>Key</th><th>Value</th><th>更新时间</th><th>状态</th><th>操作</th>
+              <th>Key</th><th>类型</th><th>Value</th><th>更新时间</th><th>状态</th><th>操作</th>
             </tr>
           </thead>
           <tbody>
-            <tr v-if="!facts.length">
-              <td colspan="5" class="empty">暂无事实记录</td>
+            <tr v-if="!filteredFacts.length">
+              <td colspan="6" class="empty">暂无记忆记录</td>
             </tr>
-            <template v-for="fact in facts" :key="fact.key">
+            <template v-for="fact in filteredFacts" :key="fact.key">
               <tr>
                 <td><code style="font-size:12px">{{ fact.key }}</code></td>
+                <td>
+                  <template v-if="editingFact === fact.key">
+                    <select v-model="editFactCategory" style="width:100px">
+                      <option v-for="option in factCategories" :key="option.key" :value="option.key">{{ option.label }}</option>
+                    </select>
+                  </template>
+                  <template v-else>
+                    <span class="tag" :class="categoryClass(fact.category)">{{ categoryLabel(fact.category) }}</span>
+                  </template>
+                </td>
                 <td>
                   <template v-if="editingFact === fact.key">
                     <input v-model="editFactValue" style="width:100%" />
@@ -81,9 +92,10 @@
               </tr>
               <!-- 冲突详情行 -->
               <tr v-if="fact.pending_confirm">
-                <td colspan="5" class="conflict-row">
+                <td colspan="6" class="conflict-row">
                   旧值: <strong>{{ fact.value }}</strong>
                   → 新值: <strong>{{ fact.pending_value }}</strong>
+                  <span v-if="fact.pending_category">（{{ categoryLabel(fact.pending_category) }}）</span>
                 </td>
               </tr>
             </template>
@@ -92,15 +104,30 @@
       </div>
     </div>
 
-    <!-- 摘要记忆 -->
     <div v-if="activeTab === 'summaries'" class="mt-4">
       <div v-if="loadingSummaries" class="loading">加载中…</div>
       <div v-else>
-        <div v-if="!summaryData?.items?.length" class="empty">暂无摘要记录</div>
-        <div v-for="item in summaryData?.items" :key="item.index" class="summary-card card mt-4">
+        <div v-if="!filteredSummaries.length" class="empty">暂无摘要记录</div>
+        <div v-for="item in filteredSummaries" :key="item.index" class="summary-card card mt-4">
           <div class="summary-meta">{{ item.created_at?.slice(0,10) }}</div>
-          <div class="summary-text">{{ item.summary }}</div>
-          <button class="btn btn-danger btn-sm" @click="deleteSummary(item.index)">删除</button>
+          <div class="summary-text">
+            <textarea
+              v-if="editingSummaryIndex === item.index"
+              v-model="editSummaryText"
+              rows="3"
+            />
+            <template v-else>{{ item.summary }}</template>
+          </div>
+          <div style="display:flex; gap:8px">
+            <template v-if="editingSummaryIndex === item.index">
+              <button class="btn btn-primary btn-sm" @click="saveSummary(item.index)">保存</button>
+              <button class="btn btn-secondary btn-sm" @click="cancelSummaryEdit">取消</button>
+            </template>
+            <template v-else>
+              <button class="btn btn-secondary btn-sm" @click="startEditSummary(item.index, item.summary)">编辑</button>
+              <button class="btn btn-danger btn-sm" @click="deleteSummary(item.index)">删除</button>
+            </template>
+          </div>
         </div>
         <div class="pagination mt-4">
           <button
@@ -118,40 +145,116 @@
       </div>
     </div>
 
-    <!-- 危险操作 -->
     <div class="card mt-6" style="border-color:#fecaca">
       <div class="card-title" style="color:#b91c1c">危险操作</div>
-      <button class="btn btn-danger" @click="confirmClear">清空此角色全部记忆</button>
+      <div class="danger-controls">
+        <select v-model="clearKind" style="width:160px">
+          <option value="all">全部记忆</option>
+          <option value="facts">长期事实</option>
+          <option value="preferences">偏好记忆</option>
+          <option value="boundaries">边界记忆</option>
+          <option value="events">事件记忆</option>
+          <option value="summaries">摘要记忆</option>
+        </select>
+        <button class="btn btn-danger" @click="confirmClear">清空所选记忆</button>
+      </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, inject, onMounted, watch } from 'vue'
+import { computed, inject, onMounted, ref, watch } from 'vue'
 import { api } from '../api'
 
-const showToast = inject<(msg: string, type?: any) => void>('showToast', () => {})
+type ToastType = 'info' | 'success' | 'error'
+type FactCategory = 'fact' | 'preference' | 'boundary' | 'event'
+type MemoryTabKey = FactCategory | 'summaries'
 
-const characters = ref<any[]>([])
+interface CharacterSummary {
+  id: string
+  name: string
+  is_active?: boolean
+}
+
+interface FactItem {
+  key: string
+  value: string
+  category: FactCategory
+  updated_at: string
+  pending_confirm: boolean
+  pending_value?: string | null
+  pending_category?: string | null
+}
+
+interface SummaryItem {
+  index: number
+  summary: string
+  created_at: string
+}
+
+interface SummaryListResponse {
+  items: SummaryItem[]
+  total: number
+}
+
+const showToast = inject<(msg: string, type?: ToastType) => void>('showToast', () => {})
+
+const characters = ref<CharacterSummary[]>([])
 const activeChar = ref<string>('')
-const activeTab = ref('facts')
-const tabs = [
-  { key: 'facts', label: '长期事实' },
+const activeTab = ref<MemoryTabKey>('fact')
+const tabs: Array<{ key: MemoryTabKey; label: string }> = [
+  { key: 'fact', label: '长期事实' },
+  { key: 'preference', label: '偏好记忆' },
+  { key: 'boundary', label: '边界记忆' },
+  { key: 'event', label: '事件记忆' },
   { key: 'summaries', label: '摘要记忆' },
 ]
+const factCategories = tabs.filter((tab) => tab.key !== 'summaries') as Array<{ key: FactCategory; label: string }>
 
-const facts = ref<any[]>([])
+const facts = ref<FactItem[]>([])
 const error = ref('')
 const editingFact = ref<string | null>(null)
 const editFactValue = ref('')
+const editFactCategory = ref<FactCategory>('fact')
 const showAddFact = ref(false)
 const newKey = ref('')
 const newValue = ref('')
+const newCategory = ref<FactCategory>('fact')
+const searchText = ref('')
+const clearKind = ref('all')
 
-const summaryData = ref<any>(null)
+const summaryData = ref<SummaryListResponse | null>(null)
 const summaryOffset = ref(0)
 const summaryLimit = 20
 const loadingSummaries = ref(false)
+const editingSummaryIndex = ref<number | null>(null)
+const editSummaryText = ref('')
+
+const activeFactCategory = computed<FactCategory | null>(() => (
+  activeTab.value === 'summaries' ? null : activeTab.value
+))
+const activeTabLabel = computed(() => (
+  tabs.find((tab) => tab.key === activeTab.value)?.label ?? '记忆'
+))
+const filteredFacts = computed(() => {
+  const search = searchText.value.trim().toLowerCase()
+  if (!search) {
+    return facts.value
+  }
+  return facts.value.filter((fact) => (
+    fact.key.toLowerCase().includes(search)
+    || fact.value.toLowerCase().includes(search)
+    || categoryLabel(fact.category).includes(searchText.value.trim())
+  ))
+})
+const filteredSummaries = computed(() => {
+  const search = searchText.value.trim().toLowerCase()
+  const items = summaryData.value?.items ?? []
+  if (!search) {
+    return items
+  }
+  return items.filter((item) => item.summary.toLowerCase().includes(search))
+})
 
 async function loadChars() {
   try {
@@ -159,7 +262,7 @@ async function loadChars() {
     if (characters.value.length) {
       const active = characters.value.find((c) => c.is_active)
       activeChar.value = active?.id ?? characters.value[0].id
-      await loadFacts()
+      await refreshActiveTab()
     }
   } catch (e: any) {
     error.value = e.message
@@ -167,15 +270,14 @@ async function loadChars() {
 }
 
 async function onCharChange() {
-  await loadFacts()
   summaryOffset.value = 0
-  await loadSummaries()
+  await refreshActiveTab()
 }
 
 async function loadFacts() {
-  if (!activeChar.value) return
+  if (!activeChar.value || !activeFactCategory.value) return
   try {
-    facts.value = await api.listFacts(activeChar.value)
+    facts.value = await api.listFacts(activeChar.value, activeFactCategory.value)
   } catch (e: any) {
     error.value = e.message
   }
@@ -193,18 +295,40 @@ async function loadSummaries() {
   }
 }
 
+async function refreshActiveTab() {
+  if (activeTab.value === 'summaries') {
+    await loadSummaries()
+    return
+  }
+  await loadFacts()
+}
+
 watch(activeTab, (t) => {
-  if (t === 'summaries') loadSummaries()
+  if (t === 'summaries') {
+    void loadSummaries()
+    return
+  }
+  void loadFacts()
 })
 
-function startEditFact(fact: any) {
+function categoryLabel(category: string | null | undefined): string {
+  const found = factCategories.find((option) => option.key === category)
+  return found?.label ?? '长期事实'
+}
+
+function categoryClass(category: string): string {
+  return `tag-${category}`
+}
+
+function startEditFact(fact: FactItem) {
   editingFact.value = fact.key
   editFactValue.value = fact.value
+  editFactCategory.value = fact.category
 }
 
 async function saveFact(key: string) {
   try {
-    await api.updateFact(activeChar.value, key, editFactValue.value)
+    await api.updateFact(activeChar.value, key, editFactValue.value, editFactCategory.value)
     editingFact.value = null
     showToast('已保存', 'success')
     await loadFacts()
@@ -216,11 +340,12 @@ async function saveFact(key: string) {
 async function addFact() {
   if (!newKey.value) return
   try {
-    await api.createFact(activeChar.value, newKey.value, newValue.value)
+    await api.createFact(activeChar.value, newKey.value, newValue.value, newCategory.value)
     showToast('已添加', 'success')
     showAddFact.value = false
     newKey.value = ''
     newValue.value = ''
+    newCategory.value = activeFactCategory.value ?? 'fact'
     await loadFacts()
   } catch (e: any) {
     showToast(`失败: ${e.message}`, 'error')
@@ -259,27 +384,79 @@ async function deleteSummary(index: number) {
   }
 }
 
-async function confirmClear() {
-  const input = prompt('此操作将清空该角色所有记忆文件。确认请输入 "DELETE"')
-  if (input !== 'DELETE') return
+function startEditSummary(index: number, summary: string) {
+  editingSummaryIndex.value = index
+  editSummaryText.value = summary
+}
+
+function cancelSummaryEdit() {
+  editingSummaryIndex.value = null
+  editSummaryText.value = ''
+}
+
+async function saveSummary(index: number) {
   try {
-    await api.clearMemories(activeChar.value)
-    showToast('已清空', 'success')
-    await loadFacts()
+    await api.updateSummary(activeChar.value, index, editSummaryText.value)
+    showToast('摘要已保存', 'success')
+    cancelSummaryEdit()
     await loadSummaries()
   } catch (e: any) {
     showToast(`失败: ${e.message}`, 'error')
   }
 }
 
-onMounted(loadChars)
+async function exportMemories() {
+  try {
+    const data = await api.exportMemories(activeChar.value)
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${activeChar.value}-memories-${new Date().toISOString().replace(/[:.]/g, '-')}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+  } catch (e: any) {
+    showToast(`导出失败: ${e.message}`, 'error')
+  }
+}
+
+async function confirmClear() {
+  const input = prompt(`此操作将清空 ${clearKind.value}。确认请输入 "DELETE"`)
+  if (input !== 'DELETE') return
+  try {
+    await api.clearMemories(activeChar.value, clearKind.value)
+    showToast('已清空', 'success')
+    await refreshActiveTab()
+  } catch (e: any) {
+    showToast(`失败: ${e.message}`, 'error')
+  }
+}
+
+onMounted(async () => {
+  await loadChars()
+  newCategory.value = activeFactCategory.value ?? 'fact'
+})
 </script>
 
 <style scoped>
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.search-input {
+  min-width: 260px;
+  flex: 1;
+}
+
 .tabs {
   display: flex;
   gap: 2px;
   border-bottom: 2px solid #e5e7eb;
+  flex-wrap: wrap;
 }
 
 .tab-btn {
@@ -303,6 +480,7 @@ onMounted(loadChars)
 .add-form {
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
   margin-bottom: 12px;
   padding: 10px;
   background: #f9fafb;
@@ -334,4 +512,15 @@ onMounted(loadChars)
   color: #374151;
   line-height: 1.5;
 }
+
+.danger-controls {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.tag-fact { background: #f3f4f6; color: #374151; }
+.tag-preference { background: #dbeafe; color: #1d4ed8; }
+.tag-boundary { background: #fee2e2; color: #b91c1c; }
+.tag-event { background: #ede9fe; color: #6d28d9; }
 </style>

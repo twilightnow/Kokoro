@@ -39,11 +39,14 @@ _SENSITIVE_KEYS = {
 _RESTART_REQUIRED_KEYS = {
     "KOKORO_DATA_DIR",
     "KOKORO_DEFAULT_CHARACTER",
+    "KOKORO_ENABLE_PERCEPTION",
 }
 _KNOWN_DEFAULTS = {
     "LLM_PROVIDER": "",
     "LLM_MODEL": "",
     "LLM_MAX_TOKENS": "300",
+    "PRICE_INPUT": "",
+    "PRICE_OUTPUT": "",
     "TTS_PROVIDER": "edge-tts",
     "TTS_VOICE": "zh-CN-XiaoxiaoNeural",
     "TTS_RATE": "+0%",
@@ -101,13 +104,16 @@ def _write_env_file(updates: Dict[str, str]) -> None:
         if stripped and not stripped.startswith("#") and "=" in stripped:
             key = stripped.partition("=")[0].strip()
             if key in updates:
-                new_lines.append(f"{key}={updates[key]}")
+                value = updates[key]
                 updated_keys.add(key)
+                if value == "":
+                    continue
+                new_lines.append(f"{key}={value}")
                 continue
         new_lines.append(line)
 
     for key, value in updates.items():
-        if key not in updated_keys:
+        if key not in updated_keys and value != "":
             new_lines.append(f"{key}={value}")
 
     _ENV_PATH.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
@@ -133,12 +139,18 @@ async def get_config() -> ConfigResponse:
 
 @router.put("", status_code=200)
 async def update_config(body: ConfigUpdateRequest) -> Dict[str, Any]:
+    existing = _read_env_file()
+    changed_keys = [
+        key
+        for key, value in body.updates.items()
+        if existing.get(key, _KNOWN_DEFAULTS.get(key, "")) != value
+    ]
     _write_env_file(body.updates)
-    restart_needed = bool(set(body.updates.keys()) & _RESTART_REQUIRED_KEYS)
+    restart_needed = bool(set(changed_keys) & _RESTART_REQUIRED_KEYS)
     return {
         "status": "saved",
         "restart_required": restart_needed,
-        "updated_keys": list(body.updates.keys()),
+        "updated_keys": changed_keys,
     }
 
 

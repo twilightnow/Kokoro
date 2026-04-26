@@ -65,19 +65,23 @@ python main.py --replay data/logs/<file>.jsonl
 
 ```bash
 npm run dev
-npm run dev:kill  # 清理调试残留的 sidecar / Vite / Tauri 进程
 ```
+
+`npm run dev` 会启动 Vite 前端和 Tauri 桌面壳；Tauri 启动后会自动拉起 sidecar。如果要显式同时启动 sidecar、Vite 和 Tauri，可以用 `npm run dev:all`。
 
 分开启动：
 
 ```bash
 npm run sidecar   # Python sidecar，默认 18765
-npm run dev       # Vite + Tauri
+npm run frontend:dev
+npm run tauri:dev
+npm run dev:kill  # 清理调试残留的 sidecar / Vite / Tauri 进程
 ```
 
 说明：
 
-- Tauri 启动时会自动拉起 sidecar；开发时也可以用 `npm run sidecar` 单独调试后端
+- Tauri 启动时会复用已运行的 sidecar；如果没有可用 sidecar，会自动拉起一个 Python sidecar
+- 开发时也可以用 `npm run sidecar` 单独调试后端，或用 `npm run dev:all` 显式启动完整三件套
 - 桌面模式依赖 Node.js 18+、Rust、WebView2
 - 打包 Python sidecar：`npm run sidecar:build`，产物位于 `dist/kokoro-sidecar.exe`
 - 管理界面提供健康检查、基础设置和脱敏诊断导出

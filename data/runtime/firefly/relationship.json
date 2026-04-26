@@ -1,0 +1,16 @@
+{
+  "intimacy": 8,
+  "trust": 12,
+  "familiarity": 10,
+  "interaction_quality_recent": 50,
+  "preferred_addressing": "队长",
+  "relationship_type": "partner",
+  "boundaries_summary": "工作日仅低频提醒",
+  "dependency_risk": 0,
+  "updated_at": "2026-04-25T03:58:58Z",
+  "change_reasons": [
+    "关系类型更新为 partner",
+    "更新了偏好称呼",
+    "更新了关系边界摘要"
+  ]
+}

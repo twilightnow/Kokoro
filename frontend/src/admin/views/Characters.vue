@@ -76,6 +76,13 @@
                 <div class="detail-k">模式</div>
                 <div class="detail-v">{{ selectedChar.manifest?.display?.mode || 'placeholder' }}</div>
               </div>
+              <div class="detail-kv">
+                <div class="detail-k">解析结果</div>
+                <div class="detail-v">
+                  <span class="tag tag-blue">请求 {{ selectedChar.validation?.requested_mode || 'placeholder' }}</span>
+                  <span class="tag tag-purple">实际 {{ selectedChar.validation?.resolved_mode || 'placeholder' }}</span>
+                </div>
+              </div>
               <template v-if="selectedChar.manifest?.display?.model3d">
                 <div class="detail-kv">
                   <div class="detail-k">默认皮肤</div>
@@ -122,6 +129,18 @@
                   <div class="detail-v">{{ selectedChar.manifest.display.live2d.model || '—' }}</div>
                 </div>
               </template>
+              <template v-else-if="selectedChar.manifest?.display?.image">
+                <div class="detail-kv">
+                  <div class="detail-k">静态图</div>
+                  <div class="detail-v">{{ selectedChar.manifest.display.image.file || '—' }}</div>
+                </div>
+              </template>
+              <div v-if="selectedChar.validation?.warnings?.length" class="detail-alert detail-alert--warning">
+                <div v-for="warning in selectedChar.validation.warnings" :key="warning">{{ warning }}</div>
+              </div>
+              <div v-if="selectedChar.validation?.errors?.length" class="detail-alert detail-alert--error">
+                <div v-for="issue in selectedChar.validation.errors" :key="issue">{{ issue }}</div>
+              </div>
               <details v-if="selectedChar.raw_manifest" class="manifest-raw">
                 <summary>查看 manifest.yaml</summary>
                 <textarea :value="selectedChar.raw_manifest" rows="14" readonly />
@@ -414,6 +433,24 @@ onMounted(load)
 .tag-blue { background: #dbeafe; color: #1d4ed8; }
 .tag-purple { background: #ede9fe; color: #6d28d9; }
 .tag-amber { background: #fef3c7; color: #92400e; }
+
+.detail-alert {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.detail-alert--warning {
+  background: #fffbeb;
+  color: #92400e;
+}
+
+.detail-alert--error {
+  background: #fef2f2;
+  color: #b91c1c;
+}
 
 .manifest-raw {
   margin-top: 12px;

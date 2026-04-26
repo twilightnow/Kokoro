@@ -105,6 +105,19 @@ class TestGetContextWithBudget(unittest.TestCase):
         total_tokens = sum(_estimate_tokens(s) for s in ctx.summary_items)
         self.assertLessEqual(total_tokens, 10)
 
+    def test_context_splits_memory_categories(self):
+        self.ms._long_term_memory.write_fact(self.char_id, "user_name", "小明", category="fact")
+        self.ms._long_term_memory.write_fact(self.char_id, "reply_style", "简短", category="preference")
+        self.ms._long_term_memory.write_fact(self.char_id, "privacy", "不要记录公司名", category="boundary")
+        self.ms._long_term_memory.write_fact(self.char_id, "recent_goal", "本周完成论文", category="event")
+
+        ctx = self.ms.get_context(self.char_id, token_budget=500)
+
+        self.assertEqual(ctx.long_term_items["user_name"], "小明")
+        self.assertEqual(ctx.preference_items["reply_style"], "简短")
+        self.assertEqual(ctx.boundary_items["privacy"], "不要记录公司名")
+        self.assertEqual(ctx.event_items["recent_goal"], "本周完成论文")
+
 
 # ── _extract_facts() 事实提取 ─────────────────────────────────────────────────
 
@@ -136,9 +149,15 @@ class TestFactExtraction(unittest.TestCase):
         llm_fn = self._make_llm_fn('{"user_name": "小明", "user_job": "程序员"}')
         history = self._make_history()
         self.ms._extract_facts(self.char_id, history, llm_fn)
-        facts = self.ms._long_term_memory.get_confirmed_facts(self.char_id)
-        self.assertEqual(facts.get("user_name"), "小明")
-        self.assertEqual(facts.get("user_job"), "程序员")
+        records = self.ms._long_term_memory.read_records(self.char_id)
+        candidates = {
+            record.key: record
+            for record in records.values()
+            if record.status == "candidate"
+        }
+        self.assertEqual(candidates["user_name"].value, "小明")
+        self.assertEqual(candidates["user_job"].value, "程序员")
+        self.assertEqual(self.ms._long_term_memory.get_confirmed_facts(self.char_id), {})
 
     def test_empty_json_no_change(self):
         llm_fn = self._make_llm_fn('{}')
@@ -161,10 +180,10 @@ class TestFactExtraction(unittest.TestCase):
     def test_non_string_values_filtered(self):
         llm_fn = self._make_llm_fn('{"age": 25, "user_name": "小明"}')
         self.ms._extract_facts(self.char_id, self._make_history(), llm_fn)
-        facts = self.ms._long_term_memory.get_confirmed_facts(self.char_id)
-        # age 是 int，应被过滤；user_name 是 str，应被保留
-        self.assertNotIn("age", facts)
-        self.assertIn("user_name", facts)
+        records = self.ms._long_term_memory.read_records(self.char_id)
+        keys = {record.key for record in records.values()}
+        self.assertNotIn("age", keys)
+        self.assertIn("user_name", keys)
 
     def test_on_session_end_skips_extract_for_short_history(self):
         llm_fn = self._make_llm_fn('{"user_name": "小明"}')
@@ -176,6 +195,47 @@ class TestFactExtraction(unittest.TestCase):
         )
         # LLM 被调用了一次（摘要），事实提取未调用（因为历史 < 2）
         self.assertEqual(llm_fn.call_count, 1)
+
+    def test_on_session_end_skips_fact_extract_for_small_talk(self):
+        llm_fn = self._make_llm_fn('{}')
+
+        self.ms.on_session_end(
+            self.char_id,
+            [
+                {"role": "user", "content": "哈哈"},
+                {"role": "assistant", "content": "嗯嗯"},
+                {"role": "user", "content": "继续聊"},
+                {"role": "assistant", "content": "好呀"},
+            ],
+            llm_fn,
+        )
+
+        self.assertEqual(llm_fn.call_count, 1)
+
+    def test_on_session_end_extracts_facts_for_preference_like_content(self):
+        llm_fn = self._make_llm_fn('{"drink_preference": "手冲咖啡"}')
+
+        self.ms.on_session_end(
+            self.char_id,
+            [
+                {"role": "user", "content": "我最近很喜欢手冲咖啡。"},
+                {"role": "assistant", "content": "听起来不错。"},
+            ],
+            llm_fn,
+        )
+
+        self.assertEqual(llm_fn.call_count, 2)
+        facts = self.ms._long_term_memory.read_facts(self.char_id)
+        self.assertEqual(facts["drink_preference"].value, "手冲咖啡")
+
+    def test_extract_facts_categorizes_boundaries_and_preferences(self):
+        llm_fn = self._make_llm_fn('{"reply_style": "简短一点", "privacy_boundary": "不要记住住址"}')
+        self.ms._extract_facts(self.char_id, self._make_history(), llm_fn)
+
+        facts = self.ms._long_term_memory.read_facts(self.char_id)
+
+        self.assertEqual(facts["reply_style"].category, "preference")
+        self.assertEqual(facts["privacy_boundary"].category, "boundary")
 
 
 # ── TruncationLog ─────────────────────────────────────────────────────────────

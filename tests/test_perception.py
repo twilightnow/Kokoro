@@ -1,9 +1,9 @@
 """
-感知层单元测试：InputTracker、WindowMonitor、CooldownManager、触发器、ProactiveEngine。
+感知层单元测试：InputTracker、WindowMonitor、PerceptionCollector、ProactiveSignalDetector。
 """
 import sys
-import time
 import tempfile
+import time
 import unittest
 from datetime import datetime
 from pathlib import Path
@@ -12,17 +12,16 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.perception.context import PerceptionContext
-from src.perception.cooldown import CooldownManager
-from src.perception.input_tracker import InputTracker
-from src.perception.window_monitor import WindowMonitor
-from src.perception.triggers import (
-    GamingTrigger,
-    IdleTrigger,
-    LateNightTrigger,
-    WindowSwitchTrigger,
-)
-from src.perception.engine import ProactiveEngine
 from src.perception.collector import PerceptionCollector
+from src.perception.input_tracker import InputTracker
+from src.perception.privacy import (
+    PerceptionAuditRepository,
+    PrivacyFilter,
+    PrivacySettings,
+    PrivacySettingsRepository,
+)
+from src.perception.window_monitor import WindowMonitor
+from src.proactive.signal_detector import ProactiveSignalDetector
 
 
 def _make_ctx(**kwargs) -> PerceptionContext:
@@ -99,132 +98,115 @@ class TestWindowMonitor(unittest.TestCase):
         self.assertGreater(len(monitor._switch_history), 0)
 
 
-# ── CooldownManager ───────────────────────────────────────────────────────────
+class TestPerceptionCollector(unittest.TestCase):
 
-class TestCooldownManager(unittest.TestCase):
+    def test_collect_updates_latest_context(self):
+        tracker = MagicMock(spec=InputTracker)
+        tracker.idle_seconds.return_value = 120.0
+        monitor = MagicMock(spec=WindowMonitor)
+        monitor.collect.return_value = "Visual Studio Code"
+        monitor.current_app_name.return_value = "Code"
+        monitor.is_fullscreen.return_value = False
+        monitor.switches_per_minute.return_value = 3.0
+        monitor.is_gaming.return_value = False
 
-    def test_can_trigger_initially_true(self):
-        cd = CooldownManager()
-        self.assertTrue(cd.can_trigger("idle"))
+        collector = PerceptionCollector(tracker, monitor)
+        ctx = collector.collect()
 
-    def test_after_trigger_cannot_retrigger(self):
-        cd = CooldownManager()
-        cd.mark_triggered("idle")
-        self.assertFalse(cd.can_trigger("idle"))
-        self.assertFalse(cd.can_trigger("other"))  # 全局冷却
-
-    def test_reset_allows_retrigger(self):
-        cd = CooldownManager()
-        cd.mark_triggered("idle")
-        cd.reset()
-        self.assertTrue(cd.can_trigger("idle"))
-
-
-# ── Triggers ──────────────────────────────────────────────────────────────────
-
-class TestTriggers(unittest.TestCase):
-
-    def test_idle_trigger_fires_when_threshold_exceeded(self):
-        trigger = IdleTrigger(threshold_sec=100)
-        ctx = _make_ctx(idle_seconds=150.0)
-        self.assertIsNotNone(trigger.check(ctx))
-
-    def test_idle_trigger_no_fire_below_threshold(self):
-        trigger = IdleTrigger(threshold_sec=100)
-        ctx = _make_ctx(idle_seconds=50.0)
-        self.assertIsNone(trigger.check(ctx))
-
-    def test_late_night_active_fires(self):
-        trigger = LateNightTrigger()
-        ctx = _make_ctx(hour=23, is_user_active=True)
-        self.assertIsNotNone(trigger.check(ctx))
-
-    def test_late_night_inactive_no_fire(self):
-        trigger = LateNightTrigger()
-        ctx = _make_ctx(hour=23, is_user_active=False)
-        self.assertIsNone(trigger.check(ctx))
-
-    def test_late_night_day_no_fire(self):
-        trigger = LateNightTrigger()
-        ctx = _make_ctx(hour=14, is_user_active=True)
-        self.assertIsNone(trigger.check(ctx))
-
-    def test_window_switch_fires_when_over_threshold(self):
-        trigger = WindowSwitchTrigger(freq_threshold=5.0)
-        ctx = _make_ctx(switches_per_minute=10.0)
-        self.assertIsNotNone(trigger.check(ctx))
-
-    def test_gaming_trigger_fires(self):
-        trigger = GamingTrigger()
-        ctx = _make_ctx(is_gaming=True)
-        self.assertIsNotNone(trigger.check(ctx))
-
-    def test_gaming_trigger_no_fire(self):
-        trigger = GamingTrigger()
-        ctx = _make_ctx(is_gaming=False)
-        self.assertIsNone(trigger.check(ctx))
+        self.assertEqual(ctx.active_window_title, "Visual Studio Code")
+        self.assertTrue(ctx.is_user_active)
+        self.assertEqual(ctx.idle_seconds, 120.0)
+        self.assertEqual(collector.last_perception(), ctx)
 
 
-# ── ProactiveEngine ───────────────────────────────────────────────────────────
+class TestPrivacyFilter(unittest.TestCase):
 
-class TestProactiveEngine(unittest.TestCase):
+    def test_blocked_title_is_removed_before_prompt(self):
+        ctx = _make_ctx(active_window_title="Secret Project - VS Code")
+        settings = PrivacySettings(blocked_title_patterns=["Secret Project"])
 
-    def _make_engine(self, ctx: PerceptionContext) -> ProactiveEngine:
-        mock_collector = MagicMock(spec=PerceptionCollector)
-        mock_collector.collect.return_value = ctx
-        mock_collector.last_perception.return_value = ctx
-        engine = ProactiveEngine(mock_collector)
-        return engine
+        safe = PrivacyFilter(settings).apply(ctx)
 
-    def test_no_trigger_returns_none(self):
-        ctx = _make_ctx(idle_seconds=0.0, is_gaming=False, switches_per_minute=0.0, hour=14)
-        engine = self._make_engine(ctx)
-        result = engine.check()
-        self.assertIsNone(result)
+        self.assertEqual(safe.active_window_title, "")
+        self.assertEqual(safe.blocked_reason, "blocked:title")
+        self.assertEqual(safe.dnd_reason, "privacy_blocked")
 
-    def test_idle_trigger_fires(self):
-        ctx = _make_ctx(idle_seconds=7500.0, is_user_active=False)
-        engine = self._make_engine(ctx)
-        # 替换 IdleTrigger 阈值为 100s
-        from src.perception.triggers import IdleTrigger
-        engine._triggers = [IdleTrigger(threshold_sec=100)]
-        result = engine.check()
-        self.assertIsNotNone(result)
-        self.assertEqual(result.tag, "idle")
+    def test_sensitive_title_is_redacted_and_truncated(self):
+        ctx = _make_ctx(active_window_title="token=abc12345678901234567890 - private document")
+        settings = PrivacySettings(max_title_length=16)
 
-    def test_trigger_then_cooldown_prevents_retrigger(self):
-        ctx = _make_ctx(idle_seconds=7500.0, is_user_active=False)
-        mock_collector = MagicMock(spec=PerceptionCollector)
-        mock_collector.collect.return_value = ctx
-        mock_collector.last_perception.return_value = ctx
-        engine = ProactiveEngine(mock_collector)
-        from src.perception.triggers import IdleTrigger
-        engine._triggers = [IdleTrigger(threshold_sec=100)]
-        # 手动清零冷却后触发
-        engine._cooldown.reset()
-        first = engine.check()
-        self.assertIsNotNone(first)
-        # 再次检查应因冷却返回 None
-        second = engine.check()
-        self.assertIsNone(second)
+        safe = PrivacyFilter(settings).apply(ctx)
 
-    def test_event_tag_matches_trigger_name(self):
-        ctx = _make_ctx(is_gaming=True)
-        engine = self._make_engine(ctx)
-        engine._cooldown.reset()
-        result = engine.check()
-        self.assertIsNotNone(result)
-        self.assertEqual(result.tag, "gaming")
+        self.assertNotIn("abc12345678901234567890", safe.active_window_title)
+        self.assertLessEqual(len(safe.active_window_title), 16)
+        self.assertIn("title_truncated", safe.redactions)
+
+    def test_audit_stores_only_safe_title(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tracker = MagicMock(spec=InputTracker)
+            tracker.idle_seconds.return_value = 0.0
+            monitor = MagicMock(spec=WindowMonitor)
+            monitor.collect.return_value = "alice@example.com - Mail"
+            monitor.current_app_name.return_value = "Mail"
+            monitor.is_fullscreen.return_value = False
+            monitor.switches_per_minute.return_value = 0.0
+            monitor.is_gaming.return_value = False
+            privacy_repo = PrivacySettingsRepository(Path(tmp))
+            privacy_repo.save(PrivacySettings(audit_enabled=True))
+            audit_repo = PerceptionAuditRepository(Path(tmp))
+
+            collector = PerceptionCollector(tracker, monitor, privacy_repo, audit_repo)
+            collector.collect()
+            items = audit_repo.list()
+
+        self.assertEqual(len(items), 1)
+        self.assertNotIn("alice@example.com", str(items[0]))
+        self.assertIn("[已脱敏]", str(items[0]))
+
+    def test_audit_is_not_written_when_privacy_filter_disabled(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tracker = MagicMock(spec=InputTracker)
+            tracker.idle_seconds.return_value = 0.0
+            monitor = MagicMock(spec=WindowMonitor)
+            monitor.collect.return_value = "alice@example.com - Mail"
+            monitor.current_app_name.return_value = "Mail"
+            monitor.is_fullscreen.return_value = False
+            monitor.switches_per_minute.return_value = 0.0
+            monitor.is_gaming.return_value = False
+            privacy_repo = PrivacySettingsRepository(Path(tmp))
+            privacy_repo.save(PrivacySettings(enabled=False, audit_enabled=True))
+            audit_repo = PerceptionAuditRepository(Path(tmp))
+
+            collector = PerceptionCollector(tracker, monitor, privacy_repo, audit_repo)
+            collector.collect()
+
+            self.assertEqual(audit_repo.list(), [])
 
 
-# ── ConversationService._handle_proactive ──────────────────────────────────────
+class TestProactiveSignalDetector(unittest.TestCase):
 
-class TestHandleProactive(unittest.TestCase):
+    def test_long_work_signal_fires_after_active_threshold(self):
+        detector = ProactiveSignalDetector()
+        detector._session_active_since = time.monotonic() - 3700
+
+        signals = detector.detect(_make_ctx(is_user_active=True))
+
+        self.assertTrue(any(signal.scene == "long_work" for signal in signals))
+
+    def test_idle_return_signal_fires_after_long_idle(self):
+        detector = ProactiveSignalDetector()
+        detector._last_was_active = False
+        detector._last_ctx = _make_ctx(is_user_active=False, idle_seconds=1900.0)
+
+        signals = detector.detect(_make_ctx(is_user_active=True, idle_seconds=0.0))
+
+        self.assertTrue(any(signal.scene == "idle_return" for signal in signals))
+
+
+class TestConversationPerceptionIntegration(unittest.TestCase):
 
     def _make_service(self):
-        """构建最小化的 ConversationService，用 mock LLM 替代真实调用。"""
         from src.application.conversation_service import ConversationService
-        from src.personality.character import CharacterConfig, PersonalityConfig, ProactiveStyle
 
         with patch("src.application.conversation_service.create_llm_client") as mock_llm_ctor:
             mock_llm = MagicMock()
@@ -257,45 +239,35 @@ class TestHandleProactive(unittest.TestCase):
                 service._llm = mock_llm
                 return service, mock_llm
 
-    def test_no_style_hint_returns_none(self):
-        service, mock_llm = self._make_service()
-        from src.perception.event import ProactiveEvent
-        event = ProactiveEvent(tag="unknown_tag", trigger_name="UnknownTrigger")
-        result = service._handle_proactive(event)
-        self.assertIsNone(result)
-        mock_llm.chat.assert_not_called()
-
-    def test_llm_failure_returns_none(self):
+    def test_generate_proactive_reply_returns_none_on_llm_failure(self):
         service, mock_llm = self._make_service()
         mock_llm.chat.side_effect = RuntimeError("LLM 挂了")
-        from src.perception.event import ProactiveEvent
-        event = ProactiveEvent(tag="idle", trigger_name="IdleTrigger")
-        result = service._handle_proactive(event)
+
+        result = service.generate_proactive_reply("idle_return", "发呆什么呢")
+
         self.assertIsNone(result)
 
-    def test_normal_trigger_returns_reply(self):
+    def test_generate_proactive_reply_keeps_turn_and_working_memory_stable(self):
         service, mock_llm = self._make_service()
-        from src.perception.event import ProactiveEvent
-        event = ProactiveEvent(tag="gaming", trigger_name="GamingTrigger")
-        result = service._handle_proactive(event)
-        self.assertIsNotNone(result)
+        turn_before = service.turn
+        wm_len_before = len(service.working_memory_messages)
+
+        result = service.generate_proactive_reply("gaming", "打游戏")
+
         self.assertEqual(result, "主动台词")
+        self.assertEqual(service.turn, turn_before)
+        self.assertEqual(len(service.working_memory_messages), wm_len_before)
 
-    def test_proactive_does_not_increment_turn(self):
-        service, mock_llm = self._make_service()
-        from src.perception.event import ProactiveEvent
-        turn_before = service._turn
-        event = ProactiveEvent(tag="gaming", trigger_name="GamingTrigger")
-        service._handle_proactive(event)
-        self.assertEqual(service._turn, turn_before)
+    def test_prepare_turn_collects_prompt_perception_without_old_engine(self):
+        service, _mock_llm = self._make_service()
+        ctx = _make_ctx(active_window_title="Visual Studio Code", idle_seconds=42.0)
+        service._perception_collector = MagicMock(spec=PerceptionCollector)
+        service._perception_collector.collect.return_value = ctx
 
-    def test_proactive_does_not_affect_working_memory(self):
-        service, mock_llm = self._make_service()
-        from src.perception.event import ProactiveEvent
-        wm_len_before = len(service._memory.working_memory)
-        event = ProactiveEvent(tag="gaming", trigger_name="GamingTrigger")
-        service._handle_proactive(event)
-        self.assertEqual(len(service._memory.working_memory), wm_len_before)
+        system_prompt, _mood_before = service._prepare_turn("你好")
+
+        self.assertEqual(service._latest_perception, ctx)
+        self.assertIn("当前窗口：Visual Studio Code", system_prompt)
 
 
 if __name__ == "__main__":

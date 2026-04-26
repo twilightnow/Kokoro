@@ -37,5 +37,5 @@ updated: 2026-04-24
 
 ## 相关设计文档
 
-- [能力层](../../desgin/能力层.md)
-- [3D 模型支持](../../desgin/3d-model-support.md)
+- [能力层](../../desgin/05-能力层.md)
+- [3D 模型支持](../../desgin/09-3d-model-support.md)

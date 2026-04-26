@@ -1,5 +1,6 @@
 import { ref } from 'vue'
 import { sidecarHttpUrl } from '../shared/sidecar'
+import type { EmotionSummary } from '../types/chat'
 
 type ReadySegments = {
   ready: string[]
@@ -17,12 +18,25 @@ const speechError = ref('')
 let pendingText = ''
 let playbackChain: Promise<void> = Promise.resolve()
 let revision = 0
+let streamedTokenSeen = false
 let activeAudio: HTMLAudioElement | null = null
 let activeAudioUrl: string | null = null
 let audioContext: AudioContext | null = null
 let analyser: AnalyserNode | null = null
 let analyserBuffer: Uint8Array<ArrayBuffer> | null = null
 let analyserFrame = 0
+let currentEmotion: EmotionSummary | null = null
+
+function getEmotionSpeechOptions(emotion?: EmotionSummary | null): { rate?: string; volume?: string } {
+  if (!emotion || !emotion.mood || emotion.mood === 'normal' || emotion.intensity <= 0) {
+    return {}
+  }
+
+  return {
+    rate: emotion.rate_delta || undefined,
+    volume: emotion.volume_delta || undefined,
+  }
+}
 
 function readInitialEnabled(): boolean {
   if (typeof window === 'undefined') {
@@ -36,6 +50,47 @@ function persistEnabled(): void {
     return
   }
   window.localStorage.setItem(TTS_STORAGE_KEY, ttsEnabled.value ? '1' : '0')
+}
+
+function syncEnabledState(enabled: boolean): void {
+  ttsEnabled.value = enabled
+  if (!enabled) {
+    stop()
+  }
+}
+
+function bindStorageSync(): void {
+  if (typeof window === 'undefined') {
+    return
+  }
+
+  window.addEventListener('storage', (event) => {
+    if (event.key !== TTS_STORAGE_KEY) {
+      return
+    }
+
+    syncEnabledState(event.newValue !== '0')
+  })
+}
+
+async function readSpeechError(response: Response): Promise<string> {
+  const contentType = response.headers.get('content-type') ?? ''
+  if (contentType.includes('application/json')) {
+    try {
+      const payload = await response.json() as { detail?: unknown; message?: unknown }
+      if (typeof payload.detail === 'string' && payload.detail.trim()) {
+        return payload.detail
+      }
+      if (typeof payload.message === 'string' && payload.message.trim()) {
+        return payload.message
+      }
+    } catch {
+      // Fall back to plain text below.
+    }
+  }
+
+  const message = await response.text()
+  return message || 'TTS 请求失败'
 }
 
 function normalizeSegment(text: string): string {
@@ -142,11 +197,20 @@ function clearActiveAudio(): void {
   stopLipSync()
 }
 
-async function requestSpeech(segment: string, currentRevision: number): Promise<string | null> {
+async function requestSpeech(
+  segment: string,
+  currentRevision: number,
+  emotion?: EmotionSummary | null,
+): Promise<string | null> {
+  const speechOptions = getEmotionSpeechOptions(emotion)
   const response = await fetch(TTS_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text: segment }),
+    body: JSON.stringify({
+      text: segment,
+      ...(speechOptions.rate ? { rate: speechOptions.rate } : {}),
+      ...(speechOptions.volume ? { volume: speechOptions.volume } : {}),
+    }),
   })
 
   if (currentRevision !== revision) {
@@ -154,8 +218,7 @@ async function requestSpeech(segment: string, currentRevision: number): Promise<
   }
 
   if (!response.ok) {
-    const message = await response.text()
-    throw new Error(message || 'TTS 请求失败')
+    throw new Error(await readSpeechError(response))
   }
 
   const blob = await response.blob()
@@ -191,7 +254,7 @@ async function playSegment(url: string, currentRevision: number): Promise<void> 
   clearActiveAudio()
 }
 
-function queueSegment(segment: string): void {
+function queueSegment(segment: string, emotion?: EmotionSummary | null): void {
   if (!segment || !ttsEnabled.value) {
     return
   }
@@ -199,7 +262,7 @@ function queueSegment(segment: string): void {
   const currentRevision = revision
   playbackChain = playbackChain.then(async () => {
     try {
-      const url = await requestSpeech(segment, currentRevision)
+      const url = await requestSpeech(segment, currentRevision, emotion ?? currentEmotion)
       if (!url) {
         return
       }
@@ -224,15 +287,17 @@ function flushPending(finalText?: string): void {
   const segment = normalizeSegment(pendingText)
   pendingText = ''
   if (segment) {
-    queueSegment(segment)
+    queueSegment(segment, currentEmotion)
   }
 }
 
-function beginStream(): void {
+function beginStream(emotion?: EmotionSummary | null): void {
   revision += 1
   pendingText = ''
+  streamedTokenSeen = false
   speechError.value = ''
   playbackChain = Promise.resolve()
+  currentEmotion = emotion ?? currentEmotion
   clearActiveAudio()
 }
 
@@ -241,18 +306,30 @@ function pushToken(token: string): void {
     return
   }
 
+  streamedTokenSeen = true
   pendingText += token
   const { ready, remaining } = splitReadySegments(pendingText)
   pendingText = remaining
-  ready.forEach(queueSegment)
+  ready.forEach((segment) => queueSegment(segment, currentEmotion))
 }
 
-function finishStream(finalText?: string): void {
-  flushPending(finalText)
+function finishStream(finalText?: string, emotion?: EmotionSummary | null): void {
+  if (emotion) {
+    currentEmotion = emotion
+  }
+  if (streamedTokenSeen) {
+    flushPending()
+  } else {
+    flushPending(finalText)
+  }
+  streamedTokenSeen = false
 }
 
-function speakNow(text: string): void {
-  beginStream()
+function speakNow(text: string, emotion?: EmotionSummary | null): void {
+  beginStream(emotion)
+  if (emotion) {
+    currentEmotion = emotion
+  }
   flushPending(text)
 }
 
@@ -260,16 +337,16 @@ function stop(): void {
   revision += 1
   pendingText = ''
   playbackChain = Promise.resolve()
+  currentEmotion = null
   clearActiveAudio()
 }
 
 function toggleTts(): void {
-  ttsEnabled.value = !ttsEnabled.value
+  syncEnabledState(!ttsEnabled.value)
   persistEnabled()
-  if (!ttsEnabled.value) {
-    stop()
-  }
 }
+
+bindStorageSync()
 
 export function useSpeechOutput() {
   return {

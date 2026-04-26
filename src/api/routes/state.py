@@ -2,10 +2,10 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
 
 from ...application.conversation_service import ConversationService
-from ...capability.tts import create_tts_client
-from ..character_assets import build_character_display, load_manifest, resolve_character_asset
+from ...capability.tts import create_tts_client, read_tts_provider, resolve_tts_provider
+from ..character_assets import build_character_display, load_manifest, resolve_character_asset, validate_character_manifest
 from ..service_registry import get_service, switch_character
-from ..schemas import HealthResponse, SessionTokenTotal, StateResponse, SwitchCharacterResponse
+from ..schemas import EmotionSummaryResponse, HealthResponse, RelationshipStateSnapshot, SessionTokenTotal, StateResponse, SwitchCharacterResponse
 
 router = APIRouter(tags=["state"])
 
@@ -16,6 +16,7 @@ async def get_state(
     service: ConversationService = Depends(get_service),
 ) -> StateResponse:
     state = service.character_state
+    relationship = service.relationship_state
     memory_ctx = service.memory_context
     token_total = service.session_token_total
     return StateResponse(
@@ -27,10 +28,23 @@ async def get_state(
         turn=service.turn,
         memory_summary_count=len(memory_ctx.summary_items),
         memory_fact_count=len(memory_ctx.long_term_items),
+        relationship=RelationshipStateSnapshot(
+            intimacy=relationship.intimacy,
+            trust=relationship.trust,
+            familiarity=relationship.familiarity,
+            interaction_quality_recent=relationship.interaction_quality_recent,
+            preferred_addressing=relationship.preferred_addressing,
+            relationship_type=relationship.relationship_type,
+            boundaries_summary=relationship.boundaries_summary,
+            dependency_risk=relationship.dependency_risk,
+            updated_at=relationship.updated_at,
+            change_reasons=relationship.change_reasons,
+        ),
         session_token_total=SessionTokenTotal(
             input=token_total["input"],
             output=token_total["output"],
         ),
+        emotion=EmotionSummaryResponse(**service.current_emotion_summary.__dict__),
     )
 
 
@@ -44,21 +58,34 @@ async def health(
 
     manifest = load_manifest(service.character_id)
     display = manifest.get("display", {}) if isinstance(manifest, dict) else {}
-    display_mode = str(display.get("mode") or "placeholder")
-    resource_ready = display_mode in {"live2d", "model3d"}
+    validation = validate_character_manifest(service.character_id)
+    display_mode = str(validation.get("requested_mode") or display.get("mode") or "placeholder")
+    resolved_mode = str(validation.get("resolved_mode") or "placeholder")
+    resource_ready = resolved_mode in {"live2d", "model3d", "image"}
+    validation_notes = validation.get("warnings") or validation.get("errors") or []
 
+    requested_tts_provider = read_tts_provider()
     try:
-        tts_client = create_tts_client()
-        tts_status = {
-            "status": "ok",
-            "provider": "edge-tts",
-            "voice": str(getattr(tts_client, "voice", "")),
-            "configured": True,
-        }
+        resolved_tts_provider = resolve_tts_provider(requested_tts_provider)
+        if resolved_tts_provider == "disabled":
+            tts_status = {
+                "status": "disabled",
+                "provider": "disabled",
+                "message": "TTS 已禁用",
+                "configured": False,
+            }
+        else:
+            tts_client = create_tts_client(provider=resolved_tts_provider)
+            tts_status = {
+                "status": "ok",
+                "provider": resolved_tts_provider,
+                "voice": str(getattr(tts_client, "voice", "")),
+                "configured": True,
+            }
     except Exception as exc:
         tts_status = {
             "status": "error",
-            "provider": "edge-tts",
+            "provider": requested_tts_provider,
             "message": str(exc),
             "configured": False,
         }
@@ -80,9 +107,11 @@ async def health(
             "configured": bool(llm_provider),
         },
         character_resources={
-            "status": "ok" if resource_ready else "fallback",
+            "status": "ok" if resource_ready and resolved_mode == display_mode and not validation_notes else "fallback",
             "display_mode": display_mode,
+            "resolved_mode": resolved_mode,
             "configured": resource_ready,
+            "message": "；".join(str(item) for item in validation_notes[:2]),
         },
         tts=tts_status,
     )

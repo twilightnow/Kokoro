@@ -23,7 +23,7 @@ fn main() {
             }
         })
         .setup(|app| {
-            if let Err(error) = sidecar::ensure_sidecar_started() {
+            if let Err(error) = sidecar::ensure_sidecar_started(app.handle()) {
                 diagnostics::report_client_log(
                     "tauri-sidecar",
                     "sidecar-start-failed",
@@ -39,6 +39,7 @@ fn main() {
             commands::set_main_always_on_top,
             commands::get_window_position,
             commands::set_window_position,
+            commands::set_main_window_size,
             commands::get_window_monitor_bounds,
             commands::get_window_metrics,
             commands::open_admin_window,

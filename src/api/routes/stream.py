@@ -13,11 +13,24 @@ import json
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from ..service_registry import get_service
-from ..schemas import StreamChunk
+from ..schemas import ExpressionEventResponse, StreamChunk
 from ..stream_manager import get_stream_manager
 from ...application.conversation_service import ConversationService
 
 router = APIRouter(tags=["stream"])
+
+
+def _make_expression_event_response(service: ConversationService) -> ExpressionEventResponse:
+    """从服务当前情绪状态构造 ExpressionEventResponse。"""
+    evt = service.current_expression_event
+    return ExpressionEventResponse(
+        emotion={"name": evt.emotion.name, "intensity": evt.emotion.intensity,
+                 "keyword": evt.emotion.keyword, "reason": evt.emotion.reason},
+        motion={"name": evt.motion.name, "priority": evt.motion.priority},
+        speech={"rate_delta": evt.speech.rate_delta, "volume_delta": evt.speech.volume_delta,
+                "pause_ms": evt.speech.pause_ms},
+        playback={"intent": evt.playback.intent},
+    )
 
 
 @router.websocket("/stream")
@@ -66,6 +79,7 @@ async def stream(websocket: WebSocket) -> None:
                     return
 
                 last_log = service.last_log_entry or {}
+                expression_event = _make_expression_event_response(service)
                 loop.call_soon_threadsafe(
                     queue.put_nowait,
                     {
@@ -74,6 +88,7 @@ async def stream(websocket: WebSocket) -> None:
                         "mood": service.character_state.mood,
                         "flagged": last_log.get("flagged", False),
                         "emotion": service.current_emotion_summary.__dict__,
+                        "expression_event": expression_event.model_dump(),
                         "safety": last_log.get("safety"),
                     },
                 )

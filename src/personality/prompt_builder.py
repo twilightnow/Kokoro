@@ -53,6 +53,15 @@ def estimate_tokens(text: str) -> int:
     return max(1, int(len(text) / 1.5))
 
 
+def _append_bullet_section(parts: list[str], title: str, items: list[str]) -> None:
+    if not items:
+        return
+    parts.append("")
+    parts.append(f"【{title}】")
+    for item in items:
+        parts.append(f"- {item}")
+
+
 @dataclass
 class PromptContext:
     """人格层 prompt 组装的统一输入数据契约。
@@ -74,9 +83,9 @@ def build_system_prompt(ctx: PromptContext) -> str:
     state = ctx.emotion
 
     mood_expr = config.mood_expressions.get(state.mood, state.mood)
-    rules_text = "\n".join(f"- {rule}" for rule in config.behavior_rules)
-    habits_text = "、".join(config.verbal_habits)
-    forbidden_text = "、".join(config.forbidden_words)
+    rules = config.effective_behavior_rules()
+    habits = config.effective_verbal_habits()
+    forbidden_words = config.effective_forbidden_words()
 
     parts = [
         f"你是{config.name}。",
@@ -88,18 +97,49 @@ def build_system_prompt(ctx: PromptContext) -> str:
             f"角色配置版本：schema {config.schema_version}"
             f" / config {config.version or 'unversioned'}。"
         ),
+    ]
+
+    if config.identity.description:
+        parts.append(f"角色描述：{config.identity.description}")
+    if config.identity.scenario:
+        parts.append(f"当前设定场景：{config.identity.scenario}")
+
+    parts.extend(
+        [
         f"核心性格：{config.personality.core_fear}",
         f"外在表现：{config.personality.surface_trait}",
         f"内在真实：{config.personality.hidden_trait}",
-        "",
-        f"行为规则：\n{rules_text}",
-        "",
-        f"口癖：{habits_text}",
-        "",
-        f"禁用词（绝对不能出现在回复中）：{forbidden_text}",
-        "",
         _build_emotion_prompt_line(state, mood_expr),
-    ]
+        ]
+    )
+
+    _append_bullet_section(parts, "行为规则", rules)
+
+    if habits:
+        parts.append("")
+        parts.append(f"口头习惯：{'、'.join(habits)}")
+
+    if forbidden_words:
+        parts.append("")
+        parts.append(f"禁用词（绝对不能出现在回复中）：{'、'.join(forbidden_words)}")
+
+    if config.dialogue.first_message:
+        parts.append("")
+        parts.append(f"开场白参考：{config.dialogue.first_message}")
+
+    _append_bullet_section(parts, "对话示例", list(config.dialogue.examples))
+
+    if config.dialogue.post_history_instructions:
+        parts.append("")
+        parts.append(f"历史对话后置指令：{config.dialogue.post_history_instructions}")
+
+    if config.memory.extraction_policy or config.memory.recall_style:
+        parts.append("")
+        parts.append("【记忆策略】")
+        if config.memory.extraction_policy:
+            parts.append(f"- 提取策略：{config.memory.extraction_policy}")
+        if config.memory.recall_style:
+            parts.append(f"- 召回风格：{config.memory.recall_style}")
 
     # 注入记忆上下文（Phase 2 及以后填充）
     mem = ctx.memory
@@ -111,22 +151,33 @@ def build_system_prompt(ctx: PromptContext) -> str:
         or mem.summary_items
     ):
         parts.append("")
+
+        def _fmt_mem_value(key: str, value: str) -> str:
+            """格式化记忆条目，对来源为 llm_extract 且置信度较低的条目附加注释。"""
+            meta = mem.record_meta.get(key)
+            if meta and meta.source == "llm_extract" and (
+                meta.confidence is None or meta.confidence < 0.75
+            ):
+                suffix = "（推断，待确认）"
+                return f"- {key}: {value}{suffix}"
+            return f"- {key}: {value}"
+
         if mem.boundary_items:
             parts.append("【用户边界】")
             for k, v in mem.boundary_items.items():
-                parts.append(f"- {k}: {v}")
+                parts.append(_fmt_mem_value(k, v))
         if mem.preference_items:
             parts.append("【用户偏好】")
             for k, v in mem.preference_items.items():
-                parts.append(f"- {k}: {v}")
+                parts.append(_fmt_mem_value(k, v))
         if mem.long_term_items:
             parts.append("【长期事实】")
             for k, v in mem.long_term_items.items():
-                parts.append(f"- {k}: {v}")
+                parts.append(_fmt_mem_value(k, v))
         if mem.event_items:
             parts.append("【近期重要事件】")
             for k, v in mem.event_items.items():
-                parts.append(f"- {k}: {v}")
+                parts.append(_fmt_mem_value(k, v))
         if mem.summary_items:
             parts.append("【近期对话摘要】")
             for s in mem.summary_items:

@@ -544,6 +544,57 @@ class TestStateEndpoint(unittest.TestCase):
                     self.assertIn("turn", data)
                     self.assertEqual(data["mood"], "normal")
 
+        def test_state_and_health_expose_role_card_bindings(self):
+                self.char_path.write_text(
+                        """
+name: 测试角色
+schema_version: \"2\"
+identity:
+    description: 桌面陪伴角色
+behavior:
+    rules: [\"先接住情绪\"]
+    verbal_habits: [\"我在\"]
+    forbidden_words: [\"作为AI\"]
+dialogue:
+    first_message: 我在这里。
+modules:
+    llm:
+        provider: openai
+        model: gpt-4o-mini
+    tts:
+        provider: edge-tts
+        voice: zh-CN-XiaoyiNeural
+    display:
+        mode: live2d
+memory:
+    extraction_policy: conservative
+    recall_style: structured
+emotion_triggers: {}
+mood_expressions:
+    normal: 平静
+""".strip(),
+                        encoding="utf-8",
+                )
+
+                with patch("src.application.conversation_service.create_llm_client") as mock_llm_ctor:
+                        mock_llm_ctor.return_value = _make_mock_llm()
+                        with patch("src.api.app._CHARACTER_PATH", self.char_path):
+                                from src.api.app import create_app
+
+                                app = create_app()
+                                with TestClient(app) as client:
+                                        state_resp = client.get("/state")
+                                        self.assertEqual(state_resp.status_code, 200)
+                                        state_data = state_resp.json()
+                                        self.assertEqual(state_data["role_card"]["modules"]["tts"]["voice"], "zh-CN-XiaoyiNeural")
+                                        self.assertEqual(state_data["role_card"]["identity"]["description"], "桌面陪伴角色")
+
+                                        health_resp = client.get("/health")
+                                        self.assertEqual(health_resp.status_code, 200)
+                                        health_data = health_resp.json()
+                                        self.assertEqual(health_data["role_card_modules"]["display"]["mode"], "live2d")
+                                        self.assertEqual(health_data["llm"]["requested_provider"], "openai")
+
 
 @unittest.skipUnless(_HAS_FASTAPI, "fastapi/httpx 未安装，跳过 API 测试")
 class TestAdminDebugEndpoints(unittest.TestCase):
@@ -646,6 +697,37 @@ class TestAdminDebugEndpoints(unittest.TestCase):
             self.assertEqual(state_data["elapsed_turns"], 0)
             self.assertEqual(state_data["current_segment"]["mood"], "happy")
             self.assertEqual(state_data["segments"], [])
+
+        def test_debug_state_exposes_role_card_payload(self):
+                self.char_path.write_text(
+                        """
+name: 测试角色
+schema_version: \"2\"
+identity:
+    description: 桌面陪伴角色
+behavior:
+    rules: [\"先接住情绪\"]
+    verbal_habits: []
+    forbidden_words: []
+dialogue:
+    first_message: 我在这里。
+modules:
+    tts:
+        provider: edge-tts
+        voice: zh-CN-XiaoxiaoNeural
+emotion_triggers: {}
+mood_expressions:
+    normal: 平静
+""".strip(),
+                        encoding="utf-8",
+                )
+
+                with self._make_client() as (client, _):
+                        state_resp = client.get("/admin/debug/state")
+                        self.assertEqual(state_resp.status_code, 200)
+                        state_data = state_resp.json()
+                        self.assertEqual(state_data["role_card"]["dialogue"]["first_message"], "我在这里。")
+                        self.assertEqual(state_data["role_card"]["modules"]["tts"]["voice"], "zh-CN-XiaoxiaoNeural")
 
     def test_client_logs_and_sandbox_can_use_working_memory(self):
         mock_llm = _make_mock_llm()
@@ -872,6 +954,41 @@ class TestTTSEndpoint(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.content, b"fake-mp3")
         self.assertEqual(resp.headers["content-type"], "audio/mpeg")
+
+        def test_tts_uses_role_card_voice_by_default(self):
+                from src.api.app import create_app
+
+                self.char_path.write_text(
+                        """
+name: 测试角色
+schema_version: \"2\"
+behavior:
+    forbidden_words: []
+emotion_triggers: {}
+mood_expressions:
+    normal: 平静
+modules:
+    tts:
+        provider: edge-tts
+        voice: zh-CN-XiaoyiNeural
+""".strip(),
+                        encoding="utf-8",
+                )
+
+                class MockTTS:
+                        async def synthesize(self, text):
+                                from src.capability.tts import TTSResult
+                                return TTSResult(audio_bytes=b"fake-mp3", voice="zh-CN-XiaoyiNeural")
+
+                with patch("src.application.conversation_service.create_llm_client", return_value=_make_mock_llm()):
+                        with patch("src.api.app._CHARACTER_PATH", self.char_path):
+                                with patch("src.api.routes.tts.create_tts_client", return_value=MockTTS()) as mock_tts_ctor:
+                                        app = create_app()
+                                        with TestClient(app) as client:
+                                                resp = client.post("/tts", json={"text": "你好，世界"})
+
+                self.assertEqual(resp.status_code, 200)
+                self.assertEqual(mock_tts_ctor.call_args.kwargs["voice"], "zh-CN-XiaoyiNeural")
 
     def test_tts_returns_disabled_message_when_provider_is_disabled(self):
         from src.api.app import create_app

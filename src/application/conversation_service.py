@@ -17,6 +17,7 @@ from ..memory.memory_service import MemoryService
 from ..perception.context import PerceptionContext
 from ..personality.character import CharacterConfig
 from ..personality.emotion import EmotionState, detect_event
+from ..personality.expression_event import ExpressionEvent, build_expression_event
 from ..personality.loader import load_character
 from ..personality.prompt_builder import PromptContext, build_system_prompt, estimate_tokens, _PROMPT_TOKEN_WARN, _PROMPT_TOKEN_HARD
 from ..runtime.relationship_service import RelationshipService, RelationshipState
@@ -61,6 +62,12 @@ class ConversationService:
 
     _MEMORY_TOKEN_BUDGET: int = 500
 
+    @staticmethod
+    def _create_llm_for_character(config: CharacterConfig):
+        provider = config.modules.llm.provider.strip() or None
+        model = config.modules.llm.model.strip() or None
+        return create_llm_client(provider=provider, model=model)
+
     def __init__(
         self,
         character_path: Path,
@@ -74,12 +81,16 @@ class ConversationService:
         self._debug = debug
         self._state = EmotionState()
         self._memory = MemoryService(data_dir)
+        self._memory.configure_memory(
+            extraction_policy=self._config.memory.extraction_policy,
+            recall_style=self._config.memory.recall_style,
+        )
         self._relationship = RelationshipService(data_dir)
         self._safety = SafetyPolicy()
         self._logger = SessionLogger()
         self._MEMORY_TOKEN_BUDGET = int(os.environ.get("MEMORY_TOKEN_BUDGET", 500))
         try:
-            self._llm = create_llm_client()
+            self._llm = self._create_llm_for_character(self._config)
         except EnvironmentError as e:
             print(f"[警告] LLM 未配置，聊天功能暂不可用: {e}", file=sys.stderr)
             self._llm = _UnavailableLLM(str(e))
@@ -141,6 +152,20 @@ class ConversationService:
     @property
     def current_emotion_summary(self):
         return self._state.emotion_summary
+
+    @property
+    def current_expression_event(self) -> ExpressionEvent:
+        """根据当前情绪状态和角色卡配置构造表现层事件。"""
+        summary = self._state.emotion_summary
+        return build_expression_event(
+            mood=summary.mood,
+            intensity=summary.intensity,
+            keyword=summary.keyword,
+            reason=summary.reason,
+            rate_delta=summary.rate_delta,
+            volume_delta=summary.volume_delta,
+            mood_expressions=self._config.mood_expressions,
+        )
 
     @property
     def turn(self) -> int:
@@ -232,6 +257,15 @@ class ConversationService:
     def reload_character_config(self) -> CharacterConfig:
         """重新读取当前角色配置文件，不重置会话状态。"""
         self._config = load_character(self._character_path)
+        try:
+            self._llm = self._create_llm_for_character(self._config)
+        except EnvironmentError as e:
+            print(f"[警告] LLM 未配置，聊天功能暂不可用: {e}", file=sys.stderr)
+            self._llm = _UnavailableLLM(str(e))
+        self._memory.configure_memory(
+            extraction_policy=self._config.memory.extraction_policy,
+            recall_style=self._config.memory.recall_style,
+        )
         return self._config
 
     def set_perception_context(self, perception_ctx: Optional[PerceptionContext]) -> None:

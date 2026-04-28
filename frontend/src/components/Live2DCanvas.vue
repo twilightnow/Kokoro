@@ -6,6 +6,7 @@ import type { Live2DDisplayConfig, Mood } from '../types/chat'
 const props = defineProps<{
   config: Live2DDisplayConfig
   mood: Mood
+  motionName?: string
   lipSyncLevel: number
   visualScale?: number
   visualOffset?: { x: number; y: number }
@@ -260,8 +261,19 @@ watch(
 )
 
 watch(
+  () => props.motionName,
+  async (name) => {
+    if (name) {
+      await playMotion(name)
+    }
+  },
+)
+
+watch(
   () => props.mood,
   async (mood) => {
+    // Expression event motion takes priority; only fall back to mood mapping when absent.
+    if (props.motionName) return
     const group = props.config.mood_motions[mood]
     if (group) {
       await playMotion(group)

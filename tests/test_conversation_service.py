@@ -117,3 +117,44 @@ class TestConversationAutoPersistence(unittest.TestCase):
         self.assertIn("AI 角色陪伴系统", reply)
         self.assertEqual(service.working_memory_messages[-1]["content"], reply)
         self.assertEqual(service.last_log_entry["safety"]["level"], "identity_confusion")
+
+    def test_reload_character_rebuilds_llm_from_role_card_modules(self):
+        from src.application.conversation_service import ConversationService
+
+        self.char_path.write_text(
+            """
+name: 测试角色
+behavior:
+  forbidden_words: []
+schema_version: \"2\"
+modules:
+  llm:
+    provider: openai
+    model: gpt-4o-mini
+emotion_triggers: {}
+mood_expressions:
+  normal: 平静
+""".strip(),
+            encoding="utf-8",
+        )
+
+        first_llm = _make_mock_llm("第一次")
+        second_llm = _make_mock_llm("第二次")
+        env = {
+            "KOKORO_DATA_DIR": str(self.data_dir),
+            "KOKORO_MEMORY_SETTLE_TURNS": "10",
+            "KOKORO_MEMORY_IDLE_SECONDS": "900",
+        }
+
+        with patch.dict(os.environ, env, clear=False):
+            with patch(
+                "src.application.conversation_service.create_llm_client",
+                side_effect=[first_llm, second_llm],
+            ) as mock_llm_ctor:
+                service = ConversationService(character_path=self.char_path)
+                service.reload_character_config()
+
+        self.addCleanup(lambda: getattr(service, "_cancel_auto_persist_timer", lambda: None)())
+        self.assertIs(service._llm, second_llm)
+        self.assertEqual(mock_llm_ctor.call_args_list[0].kwargs["provider"], "openai")
+        self.assertEqual(mock_llm_ctor.call_args_list[0].kwargs["model"], "gpt-4o-mini")

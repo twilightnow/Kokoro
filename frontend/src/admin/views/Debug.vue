@@ -24,6 +24,10 @@
       <template v-else-if="debugState">
         <div class="state-grid">
           <div class="state-row"><span class="state-k">角色</span><span>{{ debugState.character_id }} / {{ debugState.character_name }}</span></div>
+          <div class="state-row"><span class="state-k">角色卡 Schema</span><span>{{ debugState.role_card.schema_version }}</span></div>
+          <div class="state-row"><span class="state-k">角色描述</span><span>{{ debugState.role_card.identity.description || '—' }}</span></div>
+          <div class="state-row"><span class="state-k">场景</span><span>{{ debugState.role_card.identity.scenario || '—' }}</span></div>
+          <div class="state-row"><span class="state-k">模块绑定</span><span>{{ roleCardModuleSummary(debugState.role_card) }}</span></div>
           <div class="state-row">
             <span class="state-k">情绪</span>
             <span>{{ debugState.mood }}（预计剩余 {{ debugState.estimated_remaining_turns }} 轮，兼容值 {{ debugState.persist_count }}）</span>
@@ -341,6 +345,7 @@ type ToastType = 'info' | 'success' | 'error'
 interface DebugState {
   character_id: string
   character_name: string
+  role_card: DebugRoleCard
   mood: string
   persist_count: number
   keyword: string
@@ -366,6 +371,27 @@ interface DebugState {
   recent_safety_events: DebugSafetyEvent[]
   current_segment: DebugTimelineSegment | null
   segments: DebugTimelineSegment[]
+}
+
+interface DebugRoleCard {
+  schema_version: string
+  identity: {
+    description: string
+    scenario: string
+  }
+  modules: {
+    llm: {
+      provider: string
+      model: string
+    }
+    tts: {
+      provider: string
+      voice: string
+    }
+    display: {
+      mode: string
+    }
+  }
 }
 
 interface DebugEmotionEvent {
@@ -508,6 +534,13 @@ function emotionIntensityLabel(intensity: number): string {
     return '低'
   }
   return '无'
+}
+
+function roleCardModuleSummary(roleCard: DebugRoleCard): string {
+  const displayMode = roleCard.modules.display.mode || 'placeholder'
+  const ttsVoice = roleCard.modules.tts.voice || 'default-voice'
+  const llmLabel = [roleCard.modules.llm.provider, roleCard.modules.llm.model].filter(Boolean).join('/') || 'global-llm'
+  return `${displayMode} · ${ttsVoice} · ${llmLabel}`
 }
 
 function formatIntensity(intensity: number): string {

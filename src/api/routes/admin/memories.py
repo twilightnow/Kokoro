@@ -71,6 +71,10 @@ class FactItem(BaseModel):
     evidence: Optional[str] = None
     confidence: Optional[float] = None
     supersedes_record_id: Optional[str] = None
+    importance: float = 0.5
+    last_accessed: Optional[str] = None
+    access_count: int = 0
+    source_message_ids: List[str] = []
 
 
 class FactUpsertRequest(BaseModel):
@@ -82,6 +86,11 @@ class FactUpsertRequest(BaseModel):
 class FactResolveRequest(BaseModel):
     """处理冲突事实：adopt_new=True 采用新值，否则保留旧值。"""
     adopt_new: bool
+
+
+class FactImportanceRequest(BaseModel):
+    """更新记忆条目的重要性（0.0–1.0）。"""
+    importance: float
 
 
 class SummaryItem(BaseModel):
@@ -149,6 +158,10 @@ async def _list_facts_impl(
             evidence=primary.evidence,
             confidence=primary.confidence,
             supersedes_record_id=primary.supersedes_record_id,
+            importance=primary.importance,
+            last_accessed=primary.last_accessed,
+            access_count=primary.access_count,
+            source_message_ids=primary.source_message_ids,
         )
         if normalized_category and item.category != normalized_category:
             continue
@@ -234,6 +247,25 @@ async def resolve_conflict(
         "action": "adopted" if body.adopt_new else "kept",
         "record_id": mutation.record.record_id,
     }
+
+
+@router.patch("/{character_id}/facts/{key}/importance", status_code=200)
+async def update_fact_importance(
+    character_id: str,
+    key: str,
+    body: FactImportanceRequest,
+) -> Dict[str, Any]:
+    """更新指定 key 的已确认记忆条目的重要性值（0.0–1.0）。"""
+    if not 0.0 <= body.importance <= 1.0:
+        raise HTTPException(status_code=422, detail="importance 必须在 0.0 到 1.0 之间")
+    existing = await _list_facts_impl(character_id, query=key)
+    target = next((item for item in existing if item.key == key), None)
+    if target is None:
+        raise HTTPException(status_code=404, detail=f"事实不存在: {key}")
+    updated = _memory_store().update_importance(character_id, target.record_id, body.importance)
+    if not updated:
+        raise HTTPException(status_code=404, detail=f"记录不存在: {target.record_id}")
+    return {"status": "updated", "key": key, "importance": body.importance}
 
 
 @router.delete("/{character_id}/facts/{key}", status_code=200)

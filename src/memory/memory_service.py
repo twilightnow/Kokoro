@@ -11,7 +11,7 @@ import os
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-from .context import MemoryContext
+from .context import MemoryContext, MemoryRecordMeta
 from .memory_ops_log import MemoryOpsLog
 from .long_term_memory import LongTermMemory, normalize_fact_category
 from .record import MemoryRecord
@@ -70,6 +70,11 @@ _FACT_TRIGGER_MARKERS = (
 )
 
 
+_EXTRACTION_POLICY_AGGRESSIVE = "aggressive"
+_RECALL_STYLE_NARRATIVE = "narrative"
+_RECALL_STYLE_MINIMAL = "minimal"
+
+
 class MemoryService:
     """记忆服务门面：对应用层暴露统一接口，屏蔽内部三级存储细节。"""
 
@@ -82,6 +87,23 @@ class MemoryService:
         self._long_term_memory = LongTermMemory(data_dir)
         self._ops_log = MemoryOpsLog(data_dir)
         self._truncation_log = TruncationLog(data_dir)
+        self._extraction_policy: str = ""
+        self._recall_style: str = ""
+
+    def configure_memory(self, extraction_policy: str = "", recall_style: str = "") -> None:
+        """从角色卡配置中应用记忆策略。
+
+        extraction_policy:
+            ``"aggressive"`` — 每次会话结束都提取事实，不依赖触发词。
+            其他/空值   — 保守提取（默认），只有检测到触发词才调用 LLM 提取。
+
+        recall_style:
+            ``"minimal"``    — 只注入边界和偏好，跳过事实和摘要。
+            ``"narrative"``  — 将各类记忆合并为一段自然语言描述注入 prompt。
+            其他/空值   — 结构化注入（默认），按类别分别列出 key: value。
+        """
+        self._extraction_policy = (extraction_policy or "").strip().lower()
+        self._recall_style = (recall_style or "").strip().lower()
 
     @property
     def working_memory(self) -> WorkingMemory:
@@ -142,7 +164,7 @@ class MemoryService:
             )
         ]
 
-        def score(record: MemoryRecord) -> tuple[int, int, str, str]:
+        def score(record: MemoryRecord) -> tuple[int, float, int, str, str]:
             text = " ".join(
                 part for part in [record.key, record.value, record.evidence or ""] if part
             ).lower()
@@ -157,6 +179,7 @@ class MemoryService:
                         match_score += 3
             return (
                 match_score,
+                record.importance,
                 -_FACT_CATEGORY_PRIORITY.get(normalize_fact_category(record.memory_type), 99),
                 record.updated_at,
                 record.record_id,
@@ -194,6 +217,7 @@ class MemoryService:
         confirmed.sort(
             key=lambda record: (
                 _FACT_CATEGORY_PRIORITY.get(normalize_fact_category(record.memory_type), 99),
+                -record.importance,
                 record.updated_at,
                 record.record_id,
             )
@@ -203,6 +227,8 @@ class MemoryService:
         selected_preferences: Dict[str, str] = {}
         selected_boundaries: Dict[str, str] = {}
         selected_events: Dict[str, str] = {}
+        record_meta: Dict[str, MemoryRecordMeta] = {}
+        selected_record_ids: List[str] = []
         used_fact_tokens = 0
         dropped_fact_ids: List[str] = []
         for record in confirmed:
@@ -210,17 +236,24 @@ class MemoryService:
             tokens = _estimate_tokens(text)
             if used_fact_tokens + tokens <= fact_budget:
                 category = normalize_fact_category(record.memory_type)
+                meta_key = record.key
                 if category == "preference":
                     selected_preferences[record.key] = record.value
                 elif category == "boundary":
                     selected_boundaries[record.key] = record.value
                 elif category == "event":
-                    event_key = record.key
-                    if event_key in selected_events:
-                        event_key = f"{record.key}:{record.record_id[:8]}"
-                    selected_events[event_key] = record.value
+                    meta_key = record.key
+                    if record.key in selected_events:
+                        meta_key = f"{record.key}:{record.record_id[:8]}"
+                    selected_events[meta_key] = record.value
                 else:
                     selected_facts[record.key] = record.value
+                record_meta[meta_key] = MemoryRecordMeta(
+                    source=record.source,
+                    confidence=record.confidence,
+                    importance=record.importance,
+                )
+                selected_record_ids.append(record.record_id)
                 used_fact_tokens += tokens
             else:
                 dropped_fact_ids.append(record.record_id)
@@ -258,13 +291,60 @@ class MemoryService:
                 used=used_summary_tokens,
             )
 
-        return MemoryContext(
-            summary_items=selected_summaries,
-            long_term_items=selected_facts,
-            preference_items=selected_preferences,
-            boundary_items=selected_boundaries,
-            event_items=selected_events,
+        if selected_record_ids:
+            self._long_term_memory.touch_records(character_id, selected_record_ids)
+
+        return self._apply_recall_style(
+            MemoryContext(
+                summary_items=selected_summaries,
+                long_term_items=selected_facts,
+                preference_items=selected_preferences,
+                boundary_items=selected_boundaries,
+                event_items=selected_events,
+                record_meta=record_meta,
+            )
         )
+
+    def _apply_recall_style(self, ctx: MemoryContext) -> MemoryContext:
+        """按 recall_style 对记忆上下文进行后处理。"""
+        if self._recall_style == _RECALL_STYLE_MINIMAL:
+            # minimal：只保留边界和偏好，丢弃事实、事件、摘要
+            kept_keys = set(ctx.preference_items) | set(ctx.boundary_items)
+            return MemoryContext(
+                summary_items=[],
+                long_term_items={},
+                preference_items=ctx.preference_items,
+                boundary_items=ctx.boundary_items,
+                event_items={},
+                record_meta={k: v for k, v in ctx.record_meta.items() if k in kept_keys},
+            )
+        if self._recall_style == _RECALL_STYLE_NARRATIVE:
+            # narrative：将所有记忆合并为一段自然语言摘要，放入 summary_items
+            # record_meta 不再适用（内容已合并为自然语言）
+            fragments: List[str] = []
+            if ctx.boundary_items:
+                parts = "; ".join(f"{k}: {v}" for k, v in ctx.boundary_items.items())
+                fragments.append(f"用户边界：{parts}")
+            if ctx.preference_items:
+                parts = "; ".join(f"{k}: {v}" for k, v in ctx.preference_items.items())
+                fragments.append(f"用户偏好：{parts}")
+            if ctx.long_term_items:
+                parts = "; ".join(f"{k}: {v}" for k, v in ctx.long_term_items.items())
+                fragments.append(f"已知事实：{parts}")
+            if ctx.event_items:
+                parts = "; ".join(f"{k}: {v}" for k, v in ctx.event_items.items())
+                fragments.append(f"近期事件：{parts}")
+            narrative_summaries = [". ".join(fragments)] if fragments else []
+            narrative_summaries.extend(ctx.summary_items)
+            return MemoryContext(
+                summary_items=narrative_summaries,
+                long_term_items={},
+                preference_items={},
+                boundary_items={},
+                event_items={},
+            )
+        # structured（默认）：保持原样
+        return ctx
 
     def _categorize_fact(self, key: str, value: str) -> str:
         normalized_key = key.strip().lower()
@@ -453,7 +533,13 @@ class MemoryService:
             self._ops_log.record(character_id, "summary_failed", error=str(error))
 
         # 步骤 2：提取长期事实（轮数 ≥ 2 才值得提取）
-        if len(history) >= 2 and self._should_extract_facts(history):
-            self._extract_facts(character_id, history, llm_chat_fn)
-        elif len(history) >= 2:
-            self._ops_log.record(character_id, "extract_skipped")
+        # aggressive 策略：无论是否包含触发词都提取；conservative（默认）：需要触发词
+        if len(history) >= 2:
+            should_extract = (
+                self._extraction_policy == _EXTRACTION_POLICY_AGGRESSIVE
+                or self._should_extract_facts(history)
+            )
+            if should_extract:
+                self._extract_facts(character_id, history, llm_chat_fn)
+            else:
+                self._ops_log.record(character_id, "extract_skipped")

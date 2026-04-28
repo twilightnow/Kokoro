@@ -1,100 +1,26 @@
 import { ref } from 'vue'
 import { sidecarHttpUrl } from '../shared/sidecar'
 import type { EmotionSummary } from '../types/chat'
+import { SpeechPipeline } from '../lib/speechPipeline'
+import type { SpeechOwner } from '../lib/speechPipeline'
 
-type ReadySegments = {
-  ready: string[]
-  remaining: string
-}
+// ─── Constants ────────────────────────────────────────────────────────────────
 
 const TTS_STORAGE_KEY = 'kokoro-tts-enabled'
 const TTS_URL = sidecarHttpUrl('/tts')
+
+// ─── Vue reactive state ───────────────────────────────────────────────────────
 
 const ttsEnabled = ref(readInitialEnabled())
 const isSpeaking = ref(false)
 const lipSyncLevel = ref(0)
 const speechError = ref('')
 
-let pendingText = ''
-let playbackChain: Promise<void> = Promise.resolve()
-let revision = 0
-let streamedTokenSeen = false
-let activeAudio: HTMLAudioElement | null = null
-let activeAudioUrl: string | null = null
-let audioContext: AudioContext | null = null
-let analyser: AnalyserNode | null = null
-let analyserBuffer: Uint8Array<ArrayBuffer> | null = null
-let analyserFrame = 0
-let currentEmotion: EmotionSummary | null = null
+// ─── Text segmentation ────────────────────────────────────────────────────────
 
-function getEmotionSpeechOptions(emotion?: EmotionSummary | null): { rate?: string; volume?: string } {
-  if (!emotion || !emotion.mood || emotion.mood === 'normal' || emotion.intensity <= 0) {
-    return {}
-  }
-
-  return {
-    rate: emotion.rate_delta || undefined,
-    volume: emotion.volume_delta || undefined,
-  }
-}
-
-function readInitialEnabled(): boolean {
-  if (typeof window === 'undefined') {
-    return true
-  }
-  return window.localStorage.getItem(TTS_STORAGE_KEY) !== '0'
-}
-
-function persistEnabled(): void {
-  if (typeof window === 'undefined') {
-    return
-  }
-  window.localStorage.setItem(TTS_STORAGE_KEY, ttsEnabled.value ? '1' : '0')
-}
-
-function syncEnabledState(enabled: boolean): void {
-  ttsEnabled.value = enabled
-  if (!enabled) {
-    stop()
-  }
-}
-
-function bindStorageSync(): void {
-  if (typeof window === 'undefined') {
-    return
-  }
-
-  window.addEventListener('storage', (event) => {
-    if (event.key !== TTS_STORAGE_KEY) {
-      return
-    }
-
-    syncEnabledState(event.newValue !== '0')
-  })
-}
-
-async function readSpeechError(response: Response): Promise<string> {
-  const contentType = response.headers.get('content-type') ?? ''
-  if (contentType.includes('application/json')) {
-    try {
-      const payload = await response.json() as { detail?: unknown; message?: unknown }
-      if (typeof payload.detail === 'string' && payload.detail.trim()) {
-        return payload.detail
-      }
-      if (typeof payload.message === 'string' && payload.message.trim()) {
-        return payload.message
-      }
-    } catch {
-      // Fall back to plain text below.
-    }
-  }
-
-  const message = await response.text()
-  return message || 'TTS 请求失败'
-}
-
-function normalizeSegment(text: string): string {
-  return text.replace(/\s+/g, ' ').trim()
+interface ReadySegments {
+  ready: string[]
+  remaining: string
 }
 
 function splitReadySegments(text: string): ReadySegments {
@@ -127,95 +53,53 @@ function splitReadySegments(text: string): ReadySegments {
   }
 
   return {
-    ready: ready.map(normalizeSegment).filter(Boolean),
+    ready: ready.map(s => s.replace(/\s+/g, ' ').trim()).filter(Boolean),
     remaining,
   }
 }
 
-function stopLipSync(): void {
-  if (analyserFrame) {
-    window.cancelAnimationFrame(analyserFrame)
-    analyserFrame = 0
+// ─── TTS fetch ────────────────────────────────────────────────────────────────
+
+function getEmotionSpeechParams(emotion: EmotionSummary | null): { rate?: string; volume?: string } {
+  if (!emotion || !emotion.mood || emotion.mood === 'normal' || emotion.intensity <= 0) {
+    return {}
   }
-  lipSyncLevel.value = 0
+  return {
+    rate: emotion.rate_delta || undefined,
+    volume: emotion.volume_delta || undefined,
+  }
 }
 
-function startLipSync(): void {
-  if (!analyser || !analyserBuffer) {
-    lipSyncLevel.value = 0
-    return
-  }
-
-  const tick = () => {
-    if (!analyser || !analyserBuffer) {
-      lipSyncLevel.value = 0
-      return
+async function readSpeechError(response: Response): Promise<string> {
+  const contentType = response.headers.get('content-type') ?? ''
+  if (contentType.includes('application/json')) {
+    try {
+      const payload = await response.json() as { detail?: unknown; message?: unknown }
+      if (typeof payload.detail === 'string' && payload.detail.trim()) {
+        return payload.detail
+      }
+      if (typeof payload.message === 'string' && payload.message.trim()) {
+        return payload.message
+      }
+    } catch {
+      // fall through to plain text
     }
-    analyser.getByteTimeDomainData(analyserBuffer)
-    let total = 0
-    for (const value of analyserBuffer) {
-      const centered = (value - 128) / 128
-      total += centered * centered
-    }
-    const rms = Math.sqrt(total / analyserBuffer.length)
-    lipSyncLevel.value = Math.min(1, rms * 6.5)
-    analyserFrame = window.requestAnimationFrame(tick)
   }
-
-  stopLipSync()
-  analyserFrame = window.requestAnimationFrame(tick)
+  const message = await response.text()
+  return message || 'TTS 请求失败'
 }
 
-async function ensureAudioGraph(audio: HTMLAudioElement): Promise<void> {
-  if (typeof window === 'undefined' || typeof AudioContext === 'undefined') {
-    return
-  }
-  if (!audioContext) {
-    audioContext = new AudioContext()
-  }
-  if (audioContext.state === 'suspended') {
-    await audioContext.resume()
-  }
-
-  analyser = audioContext.createAnalyser()
-  analyser.fftSize = 512
-  analyserBuffer = new Uint8Array(new ArrayBuffer(analyser.frequencyBinCount))
-
-  const source = audioContext.createMediaElementSource(audio)
-  source.connect(analyser)
-  analyser.connect(audioContext.destination)
-}
-
-function clearActiveAudio(): void {
-  activeAudio?.pause()
-  activeAudio = null
-  if (activeAudioUrl) {
-    URL.revokeObjectURL(activeAudioUrl)
-    activeAudioUrl = null
-  }
-  isSpeaking.value = false
-  stopLipSync()
-}
-
-async function requestSpeech(
-  segment: string,
-  currentRevision: number,
-  emotion?: EmotionSummary | null,
-): Promise<string | null> {
-  const speechOptions = getEmotionSpeechOptions(emotion)
+async function fetchAudio(text: string, emotion: EmotionSummary | null): Promise<string | null> {
+  const params = getEmotionSpeechParams(emotion)
   const response = await fetch(TTS_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      text: segment,
-      ...(speechOptions.rate ? { rate: speechOptions.rate } : {}),
-      ...(speechOptions.volume ? { volume: speechOptions.volume } : {}),
+      text,
+      ...(params.rate ? { rate: params.rate } : {}),
+      ...(params.volume ? { volume: params.volume } : {}),
     }),
   })
-
-  if (currentRevision !== revision) {
-    return null
-  }
 
   if (!response.ok) {
     throw new Error(await readSpeechError(response))
@@ -225,82 +109,77 @@ async function requestSpeech(
   return URL.createObjectURL(blob)
 }
 
-async function playSegment(url: string, currentRevision: number): Promise<void> {
-  if (currentRevision !== revision) {
-    URL.revokeObjectURL(url)
-    return
+// ─── SpeechPipeline singleton ────────────────────────────────────────────────
+
+const pipeline = new SpeechPipeline({
+  onSpeakingChange(speaking) {
+    isSpeaking.value = speaking
+  },
+  onLipSyncLevel(level) {
+    lipSyncLevel.value = level
+  },
+  onError(message) {
+    speechError.value = message
+  },
+  fetchAudio,
+})
+
+// ─── Stream state ─────────────────────────────────────────────────────────────
+
+let pendingText = ''
+let streamedTokenSeen = false
+let currentEmotion: EmotionSummary | null = null
+
+// ─── Enabled / storage sync ──────────────────────────────────────────────────
+
+function readInitialEnabled(): boolean {
+  if (typeof window === 'undefined') {
+    return true
   }
-
-  clearActiveAudio()
-  const audio = new Audio(url)
-  activeAudio = audio
-  activeAudioUrl = url
-  isSpeaking.value = true
-
-  try {
-    await ensureAudioGraph(audio)
-  } catch {
-    // Audio analysis is best-effort; playback should still continue.
-  }
-
-  await new Promise<void>((resolve, reject) => {
-    audio.onended = () => resolve()
-    audio.onerror = () => reject(new Error('音频播放失败'))
-    void audio.play().then(() => {
-      startLipSync()
-    }).catch(reject)
-  })
-
-  clearActiveAudio()
+  return window.localStorage.getItem(TTS_STORAGE_KEY) !== '0'
 }
 
-function queueSegment(segment: string, emotion?: EmotionSummary | null): void {
-  if (!segment || !ttsEnabled.value) {
+function persistEnabled(): void {
+  if (typeof window === 'undefined') {
     return
   }
+  window.localStorage.setItem(TTS_STORAGE_KEY, ttsEnabled.value ? '1' : '0')
+}
 
-  const currentRevision = revision
-  playbackChain = playbackChain.then(async () => {
-    try {
-      const url = await requestSpeech(segment, currentRevision, emotion ?? currentEmotion)
-      if (!url) {
-        return
-      }
-      await playSegment(url, currentRevision)
-    } catch (error) {
-      speechError.value = error instanceof Error ? error.message : 'TTS 播放失败'
-      clearActiveAudio()
+function syncEnabledState(enabled: boolean): void {
+  ttsEnabled.value = enabled
+  pipeline.setEnabled(enabled)
+}
+
+function bindStorageSync(): void {
+  if (typeof window === 'undefined') {
+    return
+  }
+  window.addEventListener('storage', (event) => {
+    if (event.key !== TTS_STORAGE_KEY) {
+      return
     }
+    syncEnabledState(event.newValue !== '0')
   })
 }
 
-function flushPending(finalText?: string): void {
-  if (!ttsEnabled.value) {
-    pendingText = ''
-    return
-  }
+// ─── Stream API ───────────────────────────────────────────────────────────────
 
-  if (finalText && !pendingText.trim()) {
-    pendingText = finalText
-  }
-
-  const segment = normalizeSegment(pendingText)
-  pendingText = ''
-  if (segment) {
-    queueSegment(segment, currentEmotion)
-  }
-}
-
+/**
+ * 开始新一轮流式输出。
+ * 会中断当前所有进行中的 TTS 播放（chat 轮次切换）。
+ */
 function beginStream(emotion?: EmotionSummary | null): void {
-  revision += 1
   pendingText = ''
   streamedTokenSeen = false
   speechError.value = ''
-  playbackChain = Promise.resolve()
   currentEmotion = emotion ?? currentEmotion
-  clearActiveAudio()
+  pipeline.stop()
 }
 
+/**
+ * 推送流式 token，内部按标点切分后自动入队。
+ */
 function pushToken(token: string): void {
   if (!ttsEnabled.value || !token) {
     return
@@ -310,35 +189,84 @@ function pushToken(token: string): void {
   pendingText += token
   const { ready, remaining } = splitReadySegments(pendingText)
   pendingText = remaining
-  ready.forEach((segment) => queueSegment(segment, currentEmotion))
+
+  for (const segment of ready) {
+    pipeline.enqueue({
+      text: segment,
+      owner: 'chat',
+      intent: 'queue',
+      emotion: currentEmotion,
+    })
+  }
 }
 
-function finishStream(finalText?: string, emotion?: EmotionSummary | null): void {
+/**
+ * 完成流式输出，将剩余 pending text 入队。
+ */
+function finishStream(finalText?: string, emotion?: EmotionSummary | null, pauseMs = 0): void {
   if (emotion) {
     currentEmotion = emotion
   }
+
+  let flushText: string
   if (streamedTokenSeen) {
-    flushPending()
+    flushText = pendingText
   } else {
-    flushPending(finalText)
+    flushText = finalText && !pendingText.trim() ? finalText : pendingText
   }
+
+  pendingText = ''
   streamedTokenSeen = false
+
+  const segment = flushText.replace(/\s+/g, ' ').trim()
+  if (segment) {
+    pipeline.enqueue({
+      text: segment,
+      owner: 'chat',
+      intent: 'queue',
+      emotion: currentEmotion,
+      pauseMs,
+    })
+  }
 }
 
-function speakNow(text: string, emotion?: EmotionSummary | null): void {
-  beginStream(emotion)
+/**
+ * 立即朗读一段文字，中断当前所有播放（适用于主动提醒等高优先级场景）。
+ * owner 默认 'proactive'，可传入 'system' / 'reminder' 等。
+ */
+function speakNow(
+  text: string,
+  emotion?: EmotionSummary | null,
+  pauseMs = 0,
+  owner: SpeechOwner = 'proactive',
+): void {
+  pendingText = ''
+  streamedTokenSeen = false
   if (emotion) {
     currentEmotion = emotion
   }
-  flushPending(text)
+
+  const segment = text.replace(/\s+/g, ' ').trim()
+  if (!segment) {
+    return
+  }
+
+  pipeline.enqueue({
+    text: segment,
+    owner,
+    intent: 'interrupt',
+    emotion: emotion ?? currentEmotion,
+    pauseMs,
+  })
 }
 
+/**
+ * 停止一切 TTS 播放并清空队列。
+ */
 function stop(): void {
-  revision += 1
   pendingText = ''
-  playbackChain = Promise.resolve()
   currentEmotion = null
-  clearActiveAudio()
+  pipeline.stop()
 }
 
 function toggleTts(): void {
@@ -347,6 +275,8 @@ function toggleTts(): void {
 }
 
 bindStorageSync()
+
+// ─── Composable export ────────────────────────────────────────────────────────
 
 export function useSpeechOutput() {
   return {

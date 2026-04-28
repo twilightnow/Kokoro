@@ -14,6 +14,7 @@ from .memory_store import MemoryStore
 from .record import (
     MemoryMutationResult,
     MemoryRecord,
+    _now_iso,
     new_memory_record_id,
     normalize_memory_status,
     normalize_memory_type,
@@ -68,6 +69,10 @@ class JsonMemoryStore:
             "confidence": record.confidence,
             "supersedes_record_id": record.supersedes_record_id,
             "metadata": record.metadata,
+            "importance": record.importance,
+            "last_accessed": record.last_accessed,
+            "access_count": record.access_count,
+            "source_message_ids": record.source_message_ids,
         }
 
     def _record_from_new_dict(
@@ -79,6 +84,17 @@ class JsonMemoryStore:
         record_id = str(data.get("record_id") or raw_key)
         created_at = str(data.get("created_at") or data.get("updated_at") or "")
         updated_at = str(data.get("updated_at") or created_at)
+        raw_importance = data.get("importance")
+        importance = float(raw_importance) if isinstance(raw_importance, (int, float)) else 0.5
+        importance = max(0.0, min(1.0, importance))
+        raw_access_count = data.get("access_count")
+        access_count = int(raw_access_count) if isinstance(raw_access_count, int) else 0
+        raw_source_ids = data.get("source_message_ids")
+        source_message_ids = (
+            [str(s) for s in raw_source_ids if isinstance(s, str)]
+            if isinstance(raw_source_ids, list)
+            else []
+        )
         return MemoryRecord(
             record_id=record_id,
             character_id=str(data.get("character_id") or character_id),
@@ -97,6 +113,10 @@ class JsonMemoryStore:
                 else None
             ),
             metadata=data.get("metadata") if isinstance(data.get("metadata"), dict) else {},
+            importance=importance,
+            last_accessed=data.get("last_accessed") if isinstance(data.get("last_accessed"), str) else None,
+            access_count=access_count,
+            source_message_ids=source_message_ids,
         )
 
     def _records_from_legacy_entry(
@@ -329,6 +349,38 @@ class JsonMemoryStore:
         if removed:
             self._save_records(character_id, records)
         return removed
+
+    def touch_records(self, character_id: str, record_ids: list[str]) -> int:
+        """召回强化：更新指定记录的 last_accessed 和 access_count。
+
+        返回实际更新的记录数。
+        """
+        if not record_ids:
+            return 0
+        id_set = set(record_ids)
+        records = self.read_records(character_id)
+        now = _now_iso()
+        updated = 0
+        for record_id in id_set:
+            record = records.get(record_id)
+            if record is None:
+                continue
+            record.last_accessed = now
+            record.access_count += 1
+            updated += 1
+        if updated:
+            self._save_records(character_id, records)
+        return updated
+
+    def update_importance(self, character_id: str, record_id: str, importance: float) -> bool:
+        """更新单条记录的重要性值（0.0–1.0）。返回是否找到并更新。"""
+        records = self.read_records(character_id)
+        record = records.get(record_id)
+        if record is None:
+            return False
+        record.importance = max(0.0, min(1.0, importance))
+        self._save_records(character_id, records)
+        return True
 
     def read_facts(self, character_id: str) -> Dict[str, MemoryRecord]:
         """兼容接口：按 key 返回当前活跃记录，优先 confirmed，其次 candidate。"""

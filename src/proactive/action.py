@@ -1,6 +1,6 @@
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
-from typing import Literal
+from typing import Literal, Optional
 from uuid import uuid4
 
 InterventionLevel = Literal["silent", "expression", "short", "full"]
@@ -12,6 +12,7 @@ ProactiveScene = Literal[
     "gaming",
     "reminder",
 ]
+UrgencyLevel = Literal["low", "normal", "high", "critical"]
 
 
 def new_proactive_event_id() -> str:
@@ -25,6 +26,8 @@ class ProactiveSignal:
     trigger_name: str
     detected_at: datetime = field(default_factory=datetime.now)
     priority: int = 0
+    urgency: UrgencyLevel = "normal"
+    notify_source: Optional[str] = None
     metadata: dict[str, object] = field(default_factory=dict)
 
 
@@ -46,6 +49,8 @@ class ProactiveAction:
     user_responded: bool = False
     feedback: str | None = None
     generated_by: str = "template"
+    urgency: UrgencyLevel = "normal"
+    notify_source: str = "perception"
     metadata: dict[str, object] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, object]:

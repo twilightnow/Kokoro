@@ -51,6 +51,15 @@ class MemoryRecord:
     confidence: Optional[float] = None
     supersedes_record_id: Optional[str] = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    # 使用强化字段
+    importance: float = 0.5
+    """主观重要性：0.0（可遗忘）到 1.0（核心事实）。默认 0.5。"""
+    last_accessed: Optional[str] = None
+    """最近一次被注入 prompt 的时间（ISO 8601）。None 表示从未被召回。"""
+    access_count: int = 0
+    """被召回注入 prompt 的累计次数，用于使用强化排序。"""
+    source_message_ids: list[str] = field(default_factory=list)
+    """来源对话消息 ID 列表，供管理界面溯源。"""
 
     @property
     def category(self) -> str:

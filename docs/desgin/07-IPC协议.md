@@ -26,6 +26,10 @@
 | `POST /chat` body | `{message: string}` | 是 | 同步聊天输入，长度由 `ChatRequest` 限制在 1..2000。 |
 | `WS /stream` frame | `{message: string}` | 是 | 流式聊天输入。 |
 | `POST /tts` body | `{text, voice?, rate?, volume?}` | 是 | TTS 合成请求。 |
+| `ExpressionEvent` | object | 否 | AIRI 合并修正(追加:2026-04-28): 表情事件输入模型，包含 `emotion.name`、`emotion.intensity`、`emotion.reason`。 |
+| `MotionEvent` | object | 否 | AIRI 合并修正(追加:2026-04-28): 动作事件输入模型，包含 `motion.name`、`motion.priority`、`motion.duration_ms?`。 |
+| `SpeechEvent` | object | 否 | AIRI 合并修正(追加:2026-04-28): 语音事件输入模型，包含 `speech.rate_delta`、`speech.volume_delta`、`speech.pause_ms`、`playback.intent`。 |
+| `NotifyEvent` | object | 否 | AIRI 合并修正(追加:2026-04-28): 主动事件输入模型，包含 `source`、`scene`、`urgency`、`payload`、`privacy_level`。 |
 | `POST /switch-character?name=...` | query | 是 | 按角色目录名切换当前服务实例。 |
 | `GET /state` `GET /health` | 无 | 否 | 主窗口和 dashboard 轮询状态。 |
 | `/admin/characters/*` | HTTP | 否 | 角色清单、详情、更新、重载、设为默认启动角色。 |
@@ -41,6 +45,7 @@
 | --- | --- | --- | --- |
 | `POST /chat` | `ChatResponse` | 是 | 返回 `reply`、`mood`、`mood_changed`、`flagged`、`turn`、`usage?`、可选 `emotion` 摘要和可选 `safety` 摘要。 |
 | `WS /stream` | `StreamChunk` 序列 | 是 | 当前实现发送 `thinking`、`token`、`done`、`error` 或 `proactive`，其中 `done` / `proactive` 可附带 `emotion` 摘要，`done` 可附带 `safety` 摘要。 |
+| `WS /stream event` | `StreamChunk(type="event")` | 否 | AIRI 合并修正(追加:2026-04-28): 发送结构化表现事件；payload 必须是 `ExpressionEvent`、`MotionEvent`、`SpeechEvent` 或安全裁剪后的 `NotifyEvent`。 |
 | `GET /state` | `StateResponse` | 是 | 返回角色、display、情绪、记忆计数、关系快照、token 累计和当前 `emotion` 摘要。 |
 | `GET /health` | `HealthResponse` | 是 | 返回 sidecar、LLM、角色资源、TTS 的健康状态；TTS 可为 `ok`、`disabled` 或 `error`。 |
 | `POST /tts` | binary audio | 是 | `audio/mpeg` 响应，含 `X-TTS-Voice` 头。 |
@@ -60,6 +65,8 @@
 10. `/admin/perception/settings` 读取和写入 `data/runtime/perception/privacy_settings.json`；`/admin/perception/audit` 返回 `data/runtime/perception/audit.jsonl` 的脱敏摘要；`/admin/perception/status` 返回 collector 可用性和最近一次过滤后感知快照。
 11. `/admin/*` 其余子模块按职责访问文件系统、配置文件或当前服务实例；`/admin/memories/*` 当前通过记录仓库读写长期记忆，并向前端兼容返回 `pending_confirm`、`pending_value` 等字段；`/admin/debug/state` 额外暴露 `keyword`、`reason`、`source`、`intensity`、`started_at_turn`、`duration_turns`、`elapsed_turns`、`recovery_rate`、`estimated_remaining_turns`、`recent_events`、`current_segment` 和 `segments`；`/admin/debug/flush-session` 只触发当前服务实例的增量记忆结算，不跨写其他子模块的数据。
 12. 所有异常通过 HTTP 状态码或 `StreamChunk(type="error")` 暴露给调用方。
+13. AIRI 合并修正(追加:2026-04-28): `/stream` 在 token 或 done 之外可发送 `type=event`；事件必须带 `id`、`schema_version`、`created_at`、`source` 和 `payload`，客户端必须按 `id` 去重。
+14. AIRI 合并修正(追加:2026-04-28): 后端可由情绪状态机生成表现事件，也可从受控模型 token 解析表现事件；受控 token 解析失败时必须退化为纯文本，不得把原始控制片段显示给用户。
 
 ## 约束与规则
 - `/admin` 路由统一挂载在 `/admin` 前缀下，不复用主聊天前缀。
@@ -67,6 +74,9 @@
 - `/stream` 当前虽已逐 token 推送，但仍由同步 LLM 调用包装而来；协议必须保持 `done` 收尾。
 - `safety` 摘要只允许包含 `level`、`action`、`reason`、`rule_names`、`relationship_type`、`replaced`，不得包含原始危机文本。
 - `type=proactive` 的帧必须携带 `id`、`level`、`scene`、`expression`；`short` / `full` 级别可附带 `content` 与 `actions`，并可附带当前 `emotion` 摘要。
+- AIRI 合并修正(追加:2026-04-28): `type=event` 只能携带白名单字段；不得携带原始窗口标题、完整 reminder note、敏感配置值或未过滤 plugin payload。
+- AIRI 合并修正(追加:2026-04-28): `playback.intent` 枚举只允许 `queue`、`interrupt`、`replace`、`drop_if_busy`；非法值按 `queue` 处理并记录协议错误。
+- AIRI 合并修正(追加:2026-04-28): `/state` 返回角色卡模块绑定信息时，必须把未配置字段写为 `null` 或省略，不能回填真实 provider key。
 - `PUT /admin/config` 请求体的 `updates` 必须是字符串字典，数值输入进入请求前必须字符串化。
 - `GET /admin/config` 不返回敏感 key 明文，只返回 `is_sensitive` 和 `is_set`。
 - `/admin/perception/audit` 只能返回过滤后的 `active_window_title`，不得返回 collector 采集到的原始窗口标题。
@@ -95,12 +105,19 @@
 - 请求 `POST /admin/reminders` 创建 reminder，再请求 `POST /admin/proactive/feedback` 对应 reminder 事件；提醒状态按反馈被完成或顺延。
 - 请求 `PUT /admin/perception/settings` 写入标题黑名单；再次请求 `GET /admin/perception/settings` 返回同一规则。
 - 请求 `GET /admin/perception/audit`；返回条目不包含原始邮箱、token 或被黑名单命中的标题。
+- 连接 `WS /stream` 后触发表现事件；客户端收到 `type=event`，payload 类型为 `ExpressionEvent`，且事件包含 `schema_version`。
+- 模型输出无法解析的受控动作 token；`/stream` 返回纯文本 token，不返回损坏的 `event` 帧。
 
 ## 待定汇总
 - 无。
 
 ## Amendments
 <!-- 变更记录,只追加,不改写。 -->
+
+### 2026-04-28
+- 变更:追加 AIRI 合并的表现层事件协议，定义 ExpressionEvent、MotionEvent、SpeechEvent、NotifyEvent 和 `/stream` event chunk。
+- 原因:级联自 00-系统设计总览.md 的同日变更
+- 影响:02-人格层.md / 04-感知层.md / 05-能力层.md / 06-UI层.md / 09-3d-model-support.md / 10-安全与边界.md
 
 ### 2026-04-26
 - 变更:移除未实现的未来接口，按当前 FastAPI 路由和 admin 子模块重写 sidecar 协议文档。

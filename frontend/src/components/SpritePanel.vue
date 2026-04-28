@@ -7,6 +7,7 @@ const Model3DCanvas = defineAsyncComponent(() => import('./Model3DCanvas.vue'))
 
 const props = defineProps<{
   mood: Mood
+  motionName?: string
   characterId?: string
   characterName?: string
   display?: CharacterDisplayConfig
@@ -208,6 +209,7 @@ function clearManualSkin(): void {
           v-if="live2dConfig"
           :config="live2dConfig"
           :mood="mood"
+          :motion-name="motionName"
           :lip-sync-level="lipSyncLevel ?? 0"
           :visual-scale="visualScaleValue"
           :visual-offset="visualOffsetValue"

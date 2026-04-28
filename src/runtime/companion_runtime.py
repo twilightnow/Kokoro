@@ -8,8 +8,9 @@ from ..perception.collector import PerceptionCollector
 from ..perception.input_tracker import InputTracker
 from ..perception.privacy import PerceptionAuditRepository, PrivacySettings, PrivacySettingsRepository
 from ..perception.window_monitor import WindowMonitor
-from ..proactive.action import ProactiveAction, ProactiveSignal
+from ..proactive.action import ProactiveAction
 from ..proactive.log import ProactiveLogRepository
+from ..proactive.notify import NotifyEvent, perception_signal_to_notify_event, reminder_to_notify_event
 from ..proactive.policy import ProactivePolicy
 from ..proactive.profile import ProactiveSettings, ProactiveSettingsRepository
 from ..proactive.scheduler import ProactiveScheduler
@@ -48,6 +49,7 @@ class CompanionRuntime:
         self._task: asyncio.Task[None] | None = None
         self._input_tracker: InputTracker | None = None
         self._collector: PerceptionCollector | None = None
+        self._notify_queue: asyncio.Queue[NotifyEvent] = asyncio.Queue()
         self._status: dict[str, object] = {
             "running": False,
             "today_count": 0,
@@ -86,6 +88,13 @@ class CompanionRuntime:
         saved = self._settings_repo.save(settings)
         self._refresh_status(saved)
         return saved
+
+    def push_notify_event(self, event: NotifyEvent) -> None:
+        """将外部 NotifyEvent 推入调度队列，在下一个 run_once 周期处理。
+
+        此方法是线程安全的，可从事件循环线程直接调用。
+        """
+        self._notify_queue.put_nowait(event)
 
     def get_status(self) -> dict[str, object]:
         self._refresh_status(self.get_settings())
@@ -216,16 +225,36 @@ class CompanionRuntime:
         service = self._get_service()
         current_time = datetime.now()
 
-        reminder_signals = self._collect_reminder_signals(service.character_id, current_time)
+        # 1. 采集感知上下文
         ctx = None
         if self._collector is not None:
             ctx = await asyncio.to_thread(self._collector.collect)
         service.set_perception_context(ctx)
 
-        recent_entries = self._log_repo.list(limit=200, character_id=service.character_id)
-        signals = reminder_signals
+        # 2. 统一通过 NotifyEvent 收集所有触发源
+        notify_events: list[NotifyEvent] = []
+
+        # 2a. 到期提醒
+        for reminder in self._reminder_service.due(service.character_id, current_time):
+            notify_events.append(
+                reminder_to_notify_event(reminder.id, reminder.title)
+            )
+
+        # 2b. 感知信号
         if ctx is not None:
-            signals.extend(self._detector.detect(ctx))
+            for signal in self._detector.detect(ctx):
+                notify_events.append(perception_signal_to_notify_event(signal))
+
+        # 2c. 外部队列（插件 / API 推送）
+        while not self._notify_queue.empty():
+            try:
+                notify_events.append(self._notify_queue.get_nowait())
+            except asyncio.QueueEmpty:
+                break
+
+        signals = [evt.to_signal() for evt in notify_events]
+
+        recent_entries = self._log_repo.list(limit=200, character_id=service.character_id)
         emotion_summary = getattr(service, "current_emotion_summary", None)
         action = self._scheduler.plan(
             signals,
@@ -313,25 +342,6 @@ class CompanionRuntime:
                 action.suppressed_by = "missing_template"
                 action.generated_by = "silent"
         return action
-
-    def _collect_reminder_signals(self, character_id: str, now: datetime) -> list[ProactiveSignal]:
-        signals: list[ProactiveSignal] = []
-        for reminder in self._reminder_service.due(character_id, now):
-            signals.append(
-                ProactiveSignal(
-                    scene="reminder",
-                    reason=f"reminder_due:{reminder.id}",
-                    trigger_name="RoutineReminderTrigger",
-                    detected_at=now,
-                    priority=95,
-                    metadata={
-                        "reminder_id": reminder.id,
-                        "title": reminder.title,
-                        "summary": reminder.title,
-                    },
-                )
-            )
-        return signals
 
     def _apply_reminder_feedback(self, event: dict[str, object], feedback: str | None) -> None:
         character_id = str(event.get("character_id") or "")

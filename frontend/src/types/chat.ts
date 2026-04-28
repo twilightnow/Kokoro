@@ -1,6 +1,35 @@
 export type Mood = string
 export type ProactiveLevel = 'silent' | 'expression' | 'short' | 'full'
 
+export interface ExpressionEventEmotion {
+  name: string
+  intensity: number
+  keyword: string
+  reason: string
+}
+
+export interface ExpressionEventMotion {
+  name: string
+  priority: number
+}
+
+export interface ExpressionEventSpeech {
+  rate_delta: string
+  volume_delta: string
+  pause_ms: number
+}
+
+export interface ExpressionEventPlayback {
+  intent: 'queue' | 'immediate' | string
+}
+
+export interface ExpressionEvent {
+  emotion: ExpressionEventEmotion
+  motion: ExpressionEventMotion
+  speech: ExpressionEventSpeech
+  playback: ExpressionEventPlayback
+}
+
 export interface EmotionSummary {
   mood: Mood
   keyword: string
@@ -113,9 +142,12 @@ export interface StreamChunk {
   id?: string
   level?: ProactiveLevel
   scene?: string
+  source?: string
+  urgency?: string
   expression?: Mood
   actions?: string[]
   mood?: Mood
   flagged?: boolean
   emotion?: EmotionSummary
+  expression_event?: ExpressionEvent
 }

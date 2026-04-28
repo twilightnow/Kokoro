@@ -1,8 +1,9 @@
 import { ref } from 'vue'
 import { useChatStore } from '../stores/chat'
-import type { CharacterDisplayConfig, EmotionSummary, Mood, StreamChunk } from '../types/chat'
+import type { CharacterDisplayConfig, EmotionSummary, ExpressionEvent, Mood, StreamChunk } from '../types/chat'
 import { sidecarHttpUrl, sidecarWsUrl } from '../shared/sidecar'
 import { useSpeechOutput } from './useSpeechOutput'
+import { useExpressionEvent } from './useExpressionEvent'
 
 const WS_URL = sidecarWsUrl('/stream')
 const HEALTH_URL = sidecarHttpUrl('/health')
@@ -26,6 +27,7 @@ let retryCount = 0
 let pendingMessage: string | null = null
 let proactiveTimer: number | null = null
 const speechOutput = useSpeechOutput()
+const expressionEvent = useExpressionEvent()
 
 function isMood(value: unknown): value is Mood {
   return typeof value === 'string' && value.trim().length > 0
@@ -33,6 +35,17 @@ function isMood(value: unknown): value is Mood {
 
 function isEmotionSummary(value: unknown): value is EmotionSummary {
   return typeof value === 'object' && value !== null && typeof (value as EmotionSummary).mood === 'string'
+}
+
+function isExpressionEvent(value: unknown): value is ExpressionEvent {
+  if (typeof value !== 'object' || value === null) return false
+  const v = value as Record<string, unknown>
+  return (
+    typeof v.emotion === 'object' && v.emotion !== null &&
+    typeof v.motion === 'object' && v.motion !== null &&
+    typeof v.speech === 'object' && v.speech !== null &&
+    typeof v.playback === 'object' && v.playback !== null
+  )
 }
 
 function _doSend(text: string): void {
@@ -78,15 +91,21 @@ function _handleChunk(raw: string): void {
       store.appendReply(chunk.content)
       speechOutput.pushToken(chunk.content)
       break
-    case 'done':
+    case 'done': {
       _clearProactiveTimer()
       store.setThinking(false)
       if (chunk.content) store.setReply(chunk.content)
       if (isEmotionSummary(chunk.emotion)) store.setEmotion(chunk.emotion)
       if (isMood(chunk.mood)) store.setMood(chunk.mood)
-      speechOutput.finishStream(chunk.content, isEmotionSummary(chunk.emotion) ? chunk.emotion : store.emotion)
+      if (isExpressionEvent(chunk.expression_event)) {
+        expressionEvent.setExpressionEvent(chunk.expression_event)
+      }
+      const currentEmotion = isEmotionSummary(chunk.emotion) ? chunk.emotion : store.emotion
+      const pauseMs = isExpressionEvent(chunk.expression_event) ? chunk.expression_event.speech.pause_ms : 0
+      speechOutput.finishStream(chunk.content, currentEmotion, pauseMs)
       store.incrementTurn()
       break
+    }
     case 'error':
       _clearProactiveTimer()
       store.setThinking(false)
@@ -106,6 +125,8 @@ function _handleChunk(raw: string): void {
         eventId: chunk.id,
         level: chunk.level,
         scene: chunk.scene,
+        source: chunk.source,
+        urgency: chunk.urgency,
         content: chunk.content,
         actions: chunk.actions,
       })
@@ -120,7 +141,12 @@ function _handleChunk(raw: string): void {
         }, 1500)
       }
       if (chunk.level === 'full' && chunk.content) {
-        speechOutput.speakNow(chunk.content, isEmotionSummary(chunk.emotion) ? chunk.emotion : store.emotion)
+        speechOutput.speakNow(
+          chunk.content,
+          isEmotionSummary(chunk.emotion) ? chunk.emotion : store.emotion,
+          0,
+          'proactive',
+        )
       }
       break
     default:

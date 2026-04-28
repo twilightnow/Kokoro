@@ -42,6 +42,7 @@ class ProactiveScheduler:
             character_id,
             current_time,
             privacy_dnd_reason=privacy_dnd_reason,
+            urgency=signal.urgency,
         )
         level = decision.level if decision.allowed else "silent"
         content = ""
@@ -84,6 +85,8 @@ class ProactiveScheduler:
             settings_mode=settings.mode,
             daily_count_before=decision.daily_count_before,
             generated_by=generated_by,
+            urgency=signal.urgency,
+            notify_source=signal.notify_source or "perception",
             metadata={
                 **dict(signal.metadata),
                 "emotion": dict(emotion_summary or {}),

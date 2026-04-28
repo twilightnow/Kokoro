@@ -42,12 +42,12 @@
         <table>
           <thead>
             <tr>
-              <th>Key</th><th>类型</th><th>Value</th><th>更新时间</th><th>状态</th><th>操作</th>
+              <th>Key</th><th>类型</th><th>Value</th><th>重要性</th><th>更新时间</th><th>召回次数</th><th>状态</th><th>操作</th>
             </tr>
           </thead>
           <tbody>
             <tr v-if="!filteredFacts.length">
-              <td colspan="6" class="empty">暂无记忆记录</td>
+              <td colspan="8" class="empty">暂无记忆记录</td>
             </tr>
             <template v-for="fact in filteredFacts" :key="fact.key">
               <tr>
@@ -60,24 +60,54 @@
                   </template>
                   <template v-else>
                     <span class="tag" :class="categoryClass(fact.category)">{{ categoryLabel(fact.category) }}</span>
+                    <span v-if="fact.source === 'llm_extract'" class="badge badge-gray" style="margin-left:4px;font-size:10px">推断</span>
                   </template>
                 </td>
                 <td>
                   <template v-if="editingFact === fact.key">
                     <input v-model="editFactValue" style="width:100%" />
                   </template>
-                  <template v-else>{{ fact.value }}</template>
+                  <template v-else>
+                    {{ fact.value }}
+                    <span v-if="fact.confidence !== null && fact.confidence !== undefined && fact.confidence < 0.75" style="color:#9ca3af;font-size:11px"> ({{ Math.round(fact.confidence * 100) }}%)</span>
+                  </template>
+                </td>
+                <td style="min-width:90px">
+                  <template v-if="editingImportance === fact.key">
+                    <input
+                      v-model.number="editImportanceValue"
+                      type="range" min="0" max="1" step="0.05"
+                      style="width:70px;vertical-align:middle"
+                    />
+                    <span style="font-size:11px;color:#6b7280">{{ editImportanceValue.toFixed(2) }}</span>
+                  </template>
+                  <template v-else>
+                    <span
+                      class="importance-pill"
+                      :class="importanceClass(fact.importance)"
+                      style="cursor:pointer"
+                      :title="`重要性: ${fact.importance.toFixed(2)}，点击调整`"
+                      @click="startEditImportance(fact)"
+                    >{{ importanceLabel(fact.importance) }}</span>
+                  </template>
                 </td>
                 <td style="color:#9ca3af;font-size:12px">{{ fact.updated_at?.slice(0,10) }}</td>
+                <td style="color:#9ca3af;font-size:12px;text-align:center" :title="fact.last_accessed ? `最近召回: ${fact.last_accessed.slice(0,16)}` : '从未被召回'">
+                  {{ fact.access_count }}
+                </td>
                 <td>
                   <span v-if="fact.pending_confirm" class="badge badge-yellow">⚠️ 待确认</span>
                   <span v-else class="badge badge-green">✅ 已确认</span>
                 </td>
                 <td>
-                  <div style="display:flex; gap:4px">
+                  <div style="display:flex; gap:4px; flex-wrap:wrap">
                     <template v-if="editingFact === fact.key">
                       <button class="btn btn-primary btn-sm" @click="saveFact(fact.key)">保存</button>
                       <button class="btn btn-secondary btn-sm" @click="editingFact=null">取消</button>
+                    </template>
+                    <template v-else-if="editingImportance === fact.key">
+                      <button class="btn btn-primary btn-sm" @click="saveImportance(fact.key)">保存</button>
+                      <button class="btn btn-secondary btn-sm" @click="editingImportance=null">取消</button>
                     </template>
                     <template v-else-if="fact.pending_confirm">
                       <button class="btn btn-primary btn-sm" @click="resolveConflict(fact.key, true)">采用新值</button>
@@ -92,7 +122,7 @@
               </tr>
               <!-- 冲突详情行 -->
               <tr v-if="fact.pending_confirm">
-                <td colspan="6" class="conflict-row">
+                <td colspan="8" class="conflict-row">
                   旧值: <strong>{{ fact.value }}</strong>
                   → 新值: <strong>{{ fact.pending_value }}</strong>
                   <span v-if="fact.pending_category">（{{ categoryLabel(fact.pending_category) }}）</span>
@@ -177,13 +207,20 @@ interface CharacterSummary {
 }
 
 interface FactItem {
+  record_id: string
   key: string
   value: string
   category: FactCategory
+  source: string
   updated_at: string
   pending_confirm: boolean
   pending_value?: string | null
   pending_category?: string | null
+  evidence?: string | null
+  confidence?: number | null
+  importance: number
+  last_accessed?: string | null
+  access_count: number
 }
 
 interface SummaryItem {
@@ -222,6 +259,9 @@ const newValue = ref('')
 const newCategory = ref<FactCategory>('fact')
 const searchText = ref('')
 const clearKind = ref('all')
+
+const editingImportance = ref<string | null>(null)
+const editImportanceValue = ref(0.5)
 
 const summaryData = ref<SummaryListResponse | null>(null)
 const summaryOffset = ref(0)
@@ -318,6 +358,34 @@ function categoryLabel(category: string | null | undefined): string {
 
 function categoryClass(category: string): string {
   return `tag-${category}`
+}
+
+function importanceLabel(importance: number): string {
+  if (importance >= 0.8) return '核心'
+  if (importance >= 0.5) return '普通'
+  return '弱'
+}
+
+function importanceClass(importance: number): string {
+  if (importance >= 0.8) return 'importance-high'
+  if (importance >= 0.5) return 'importance-medium'
+  return 'importance-low'
+}
+
+function startEditImportance(fact: FactItem) {
+  editingImportance.value = fact.key
+  editImportanceValue.value = fact.importance
+}
+
+async function saveImportance(key: string) {
+  try {
+    await api.updateFactImportance(activeChar.value, key, editImportanceValue.value)
+    editingImportance.value = null
+    showToast('重要性已更新', 'success')
+    await loadFacts()
+  } catch (e: any) {
+    showToast(`失败: ${e.message}`, 'error')
+  }
 }
 
 function startEditFact(fact: FactItem) {
@@ -491,6 +559,29 @@ onMounted(async () => {
   background: #fffbeb;
   font-size: 12px;
   color: #92400e;
+}
+
+.importance-pill {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.importance-high {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.importance-medium {
+  background: #e0f2fe;
+  color: #0369a1;
+}
+
+.importance-low {
+  background: #f3f4f6;
+  color: #6b7280;
 }
 
 .summary-card {

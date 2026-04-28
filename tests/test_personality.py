@@ -380,6 +380,58 @@ class TestLoadCharacter(unittest.TestCase):
         self.assertIn("happy", config.emotion_profiles)
         self.assertEqual(config.emotion_profiles["happy"].tts.rate_delta, "+10%")
 
+    def test_load_character_supports_v2_role_card_fields(self):
+        data = {
+            "name": "测试角色",
+            "schema_version": "2",
+            "identity": {
+                "description": "陪伴型桌面角色",
+                "scenario": "深夜陪伴",
+            },
+            "personality": {
+                "core_fear": "被忘记",
+                "surface_trait": "温柔",
+                "hidden_trait": "敏感",
+            },
+            "behavior": {
+                "rules": ["先接住情绪"],
+                "verbal_habits": ["我在"],
+                "forbidden_words": ["作为AI"],
+            },
+            "dialogue": {
+                "first_message": "我在这里。",
+                "examples": ["用户：今天很累。\n角色：先坐一下，我陪你缓缓。"],
+                "post_history_instructions": "优先延续亲密语境。",
+            },
+            "modules": {
+                "llm": {"provider": "openai", "model": "gpt-4o-mini"},
+                "tts": {"provider": "edge-tts", "voice": "zh-CN-XiaoxiaoNeural"},
+                "display": {"mode": "live2d"},
+            },
+            "memory": {
+                "extraction_policy": "conservative",
+                "recall_style": "structured",
+            },
+            "proactive": {
+                "style": {
+                    "idle_too_long": "你安静了好一会。",
+                },
+            },
+            "emotion_triggers": {"happy": ["开心"]},
+            "mood_expressions": {"normal": "平静", "happy": "开心"},
+        }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _make_yaml(tmp, data)
+            config = load_character(path)
+
+        self.assertEqual(config.schema_version, "2")
+        self.assertEqual(config.identity.description, "陪伴型桌面角色")
+        self.assertEqual(config.dialogue.first_message, "我在这里。")
+        self.assertEqual(config.modules.tts.voice, "zh-CN-XiaoxiaoNeural")
+        self.assertEqual(config.effective_behavior_rules(), ["先接住情绪"])
+        self.assertEqual(config.proactive.style.idle_too_long, "你安静了好一会。")
+
 
 # ── build_system_prompt 测试 ──────────────────────────────────────────────────
 
@@ -476,6 +528,24 @@ class TestBuildSystemPrompt(unittest.TestCase):
         result = build_system_prompt(ctx)
         self.assertIsInstance(result, str)
         self.assertGreater(len(result), 0)
+
+    def test_prompt_includes_v2_role_card_sections(self):
+        ctx = self._make_ctx(schema_version="2")
+        ctx.character.identity.description = "桌面陪伴角色"
+        ctx.character.identity.scenario = "晚间房间"
+        ctx.character.dialogue.first_message = "今晚也一起待会吧。"
+        ctx.character.dialogue.examples = ["用户：睡不着。\n角色：那我陪你把呼吸放慢一点。"]
+        ctx.character.dialogue.post_history_instructions = "延续上一轮的情绪。"
+        ctx.character.memory.extraction_policy = "conservative"
+        ctx.character.memory.recall_style = "structured"
+
+        prompt = build_system_prompt(ctx)
+
+        self.assertIn("角色描述：桌面陪伴角色", prompt)
+        self.assertIn("当前设定场景：晚间房间", prompt)
+        self.assertIn("开场白参考：今晚也一起待会吧。", prompt)
+        self.assertIn("【对话示例】", prompt)
+        self.assertIn("【记忆策略】", prompt)
 
 
 # ── estimate_tokens 测试 ──────────────────────────────────────────────────────

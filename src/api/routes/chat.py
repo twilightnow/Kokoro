@@ -8,7 +8,7 @@ import asyncio
 from fastapi import APIRouter, Depends, HTTPException
 
 from ..service_registry import get_service
-from ..schemas import ChatRequest, ChatResponse, EmotionSummaryResponse, SafetySummary, UsageInfo
+from ..schemas import ChatRequest, ChatResponse, EmotionSummaryResponse, ExpressionEventResponse, SafetySummary, UsageInfo
 from ...application.conversation_service import ConversationService
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -43,6 +43,16 @@ async def chat(
     if raw_safety:
         safety_info = SafetySummary(**raw_safety)
 
+    evt = service.current_expression_event
+    expression_event = ExpressionEventResponse(
+        emotion={"name": evt.emotion.name, "intensity": evt.emotion.intensity,
+                 "keyword": evt.emotion.keyword, "reason": evt.emotion.reason},
+        motion={"name": evt.motion.name, "priority": evt.motion.priority},
+        speech={"rate_delta": evt.speech.rate_delta, "volume_delta": evt.speech.volume_delta,
+                "pause_ms": evt.speech.pause_ms},
+        playback={"intent": evt.playback.intent},
+    )
+
     return ChatResponse(
         reply=reply,
         mood=mood_after,
@@ -52,4 +62,5 @@ async def chat(
         usage=usage_info,
         emotion=EmotionSummaryResponse(**service.current_emotion_summary.__dict__),
         safety=safety_info,
+        expression_event=expression_event,
     )

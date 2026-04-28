@@ -72,6 +72,11 @@ export const api = {
     request<any>(`/admin/memories/${charId}/facts/${encodeURIComponent(key)}`, {
       method: 'DELETE',
     }),
+  updateFactImportance: (charId: string, key: string, importance: number) =>
+    request<any>(`/admin/memories/${charId}/facts/${encodeURIComponent(key)}/importance`, {
+      method: 'PATCH',
+      body: JSON.stringify({ importance }),
+    }),
   listSummaries: (charId: string, offset = 0, limit = 20) =>
     request<any>(`/admin/memories/${charId}/summaries?offset=${offset}&limit=${limit}`),
   updateSummary: (charId: string, index: number, summary: string) =>

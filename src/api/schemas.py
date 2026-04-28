@@ -38,6 +38,75 @@ class EmotionSummaryResponse(BaseModel):
     volume_delta: str = ""
 
 
+class RoleCardIdentityResponse(BaseModel):
+    description: str = ""
+    scenario: str = ""
+
+
+class RoleCardPersonalityResponse(BaseModel):
+    core_fear: str = ""
+    surface_trait: str = ""
+    hidden_trait: str = ""
+
+
+class RoleCardBehaviorResponse(BaseModel):
+    rules: List[str] = Field(default_factory=list)
+    verbal_habits: List[str] = Field(default_factory=list)
+    forbidden_words: List[str] = Field(default_factory=list)
+
+
+class RoleCardDialogueResponse(BaseModel):
+    first_message: str = ""
+    examples: List[str] = Field(default_factory=list)
+    post_history_instructions: str = ""
+
+
+class RoleCardLLMModuleResponse(BaseModel):
+    provider: str = ""
+    model: str = ""
+
+
+class RoleCardTTSModuleResponse(BaseModel):
+    provider: str = ""
+    voice: str = ""
+
+
+class RoleCardDisplayModuleResponse(BaseModel):
+    mode: str = ""
+
+
+class RoleCardModulesResponse(BaseModel):
+    llm: RoleCardLLMModuleResponse = Field(default_factory=RoleCardLLMModuleResponse)
+    tts: RoleCardTTSModuleResponse = Field(default_factory=RoleCardTTSModuleResponse)
+    display: RoleCardDisplayModuleResponse = Field(default_factory=RoleCardDisplayModuleResponse)
+
+
+class RoleCardMemoryResponse(BaseModel):
+    extraction_policy: str = ""
+    recall_style: str = ""
+
+
+class RoleCardProactiveStyleResponse(BaseModel):
+    idle_too_long: str = ""
+    user_working_late: str = ""
+    user_gaming: str = ""
+
+
+class RoleCardProactiveResponse(BaseModel):
+    style: RoleCardProactiveStyleResponse = Field(default_factory=RoleCardProactiveStyleResponse)
+
+
+class RoleCardResponse(BaseModel):
+    schema_version: str = "1"
+    identity: RoleCardIdentityResponse = Field(default_factory=RoleCardIdentityResponse)
+    personality: RoleCardPersonalityResponse = Field(default_factory=RoleCardPersonalityResponse)
+    behavior: RoleCardBehaviorResponse = Field(default_factory=RoleCardBehaviorResponse)
+    dialogue: RoleCardDialogueResponse = Field(default_factory=RoleCardDialogueResponse)
+    modules: RoleCardModulesResponse = Field(default_factory=RoleCardModulesResponse)
+    memory: RoleCardMemoryResponse = Field(default_factory=RoleCardMemoryResponse)
+    proactive: RoleCardProactiveResponse = Field(default_factory=RoleCardProactiveResponse)
+
+
 class ChatResponse(BaseModel):
     reply: str
     mood: str
@@ -47,6 +116,38 @@ class ChatResponse(BaseModel):
     usage: Optional[UsageInfo] = None
     emotion: Optional[EmotionSummaryResponse] = None
     safety: Optional[SafetySummary] = None
+    expression_event: Optional["ExpressionEventResponse"] = None
+
+
+class ExpressionEmotionResponse(BaseModel):
+    name: str = "normal"
+    intensity: float = 0.0
+    keyword: str = ""
+    reason: str = ""
+
+
+class ExpressionMotionResponse(BaseModel):
+    name: str = ""
+    priority: int = 50
+
+
+class ExpressionSpeechResponse(BaseModel):
+    rate_delta: str = ""
+    volume_delta: str = ""
+    pause_ms: int = 0
+
+
+class ExpressionPlaybackResponse(BaseModel):
+    intent: str = "queue"
+
+
+class ExpressionEventResponse(BaseModel):
+    """表现层事件：统一情绪 / 动作 / TTS 参数，供 frontend 驱动动画和语音。"""
+
+    emotion: ExpressionEmotionResponse = Field(default_factory=ExpressionEmotionResponse)
+    motion: ExpressionMotionResponse = Field(default_factory=ExpressionMotionResponse)
+    speech: ExpressionSpeechResponse = Field(default_factory=ExpressionSpeechResponse)
+    playback: ExpressionPlaybackResponse = Field(default_factory=ExpressionPlaybackResponse)
 
 
 class Live2DDisplayConfig(BaseModel):
@@ -154,6 +255,7 @@ class StateResponse(BaseModel):
     character_id: str
     character_name: str
     display: CharacterDisplayConfig = Field(default_factory=CharacterDisplayConfig)
+    role_card: RoleCardResponse = Field(default_factory=RoleCardResponse)
     mood: str
     persist_count: int
     turn: int
@@ -169,6 +271,7 @@ class HealthResponse(BaseModel):
     character_id: str
     character: str
     version: str = ""
+    role_card_modules: RoleCardModulesResponse = Field(default_factory=RoleCardModulesResponse)
     sidecar: Dict[str, str] = Field(default_factory=dict)
     llm: Dict[str, str | bool] = Field(default_factory=dict)
     character_resources: Dict[str, str | bool] = Field(default_factory=dict)
@@ -195,12 +298,24 @@ class StreamChunk(BaseModel):
     id: Optional[str] = None
     level: Optional[str] = None
     scene: Optional[str] = None
+    source: Optional[str] = None
+    urgency: Optional[str] = None
     expression: Optional[str] = None
     actions: Optional[List[str]] = None
     mood: Optional[str] = None
     flagged: Optional[bool] = None
     emotion: Optional[EmotionSummaryResponse] = None
+    expression_event: Optional[ExpressionEventResponse] = None
     safety: Optional[SafetySummary] = None
+
+
+class NotifyEventRequest(BaseModel):
+    """外部插件/API 推送主动事件的请求体。"""
+
+    scene: str = Field(..., description="事件场景，合法值：late_night/long_work/idle_return/window_switch/gaming/reminder")
+    urgency: str = Field(default="normal", description="紧急程度：low/normal/high/critical")
+    payload: Dict[str, object] = Field(default_factory=dict, description="附加载荷，内容由来源决定")
+    privacy_level: str = Field(default="public", description="隐私级别：public/private/sensitive")
 
 
 Model3DSkinConfig.model_rebuild()

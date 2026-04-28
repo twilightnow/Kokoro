@@ -26,6 +26,8 @@ export const useChatStore = defineStore('chat', () => {
   const proactiveEventId = ref<string>('')
   const proactiveLevel = ref<ProactiveLevel>('silent')
   const proactiveScene = ref<string>('')
+  const proactiveSource = ref<string>('')
+  const proactiveUrgency = ref<string>('normal')
   const characterId = ref<string>('')
   const characterName = ref<string>('')
   const display = ref<CharacterDisplayConfig>({ mode: 'placeholder' })
@@ -60,12 +62,16 @@ export const useChatStore = defineStore('chat', () => {
     eventId?: string
     level?: ProactiveLevel
     scene?: string
+    source?: string
+    urgency?: string
     content: string
     actions?: string[]
   }): void {
     proactiveEventId.value = payload.eventId ?? ''
     proactiveLevel.value = payload.level ?? 'short'
     proactiveScene.value = payload.scene ?? ''
+    proactiveSource.value = payload.source ?? ''
+    proactiveUrgency.value = payload.urgency ?? 'normal'
     proactiveActions.value = payload.level === 'expression'
       ? []
       : payload.actions ?? ['好', '知道了', '不想说']
@@ -76,6 +82,8 @@ export const useChatStore = defineStore('chat', () => {
     proactiveEventId.value = ''
     proactiveLevel.value = 'silent'
     proactiveScene.value = ''
+    proactiveSource.value = ''
+    proactiveUrgency.value = 'normal'
     proactiveActions.value = []
     if (!isThinking.value) {
       reply.value = ''
@@ -122,6 +130,8 @@ export const useChatStore = defineStore('chat', () => {
     proactiveEventId,
     proactiveLevel,
     proactiveScene,
+    proactiveSource,
+    proactiveUrgency,
     characterId,
     characterName,
     display,

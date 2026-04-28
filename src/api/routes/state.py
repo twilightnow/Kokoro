@@ -23,6 +23,7 @@ async def get_state(
         character_id=service.character_id,
         character_name=service.character.name,
         display=build_character_display(service.character_id, str(request.base_url)),
+        role_card=service.character.to_role_card_payload(),
         mood=state.mood,
         persist_count=state.persist_count,
         turn=service.turn,
@@ -55,16 +56,24 @@ async def health(
     llm = getattr(service, "_llm", None)
     llm_provider = str(getattr(llm, "provider", "") or "")
     llm_model = str(getattr(llm, "model", "") or "")
+    role_card_modules = service.character.to_role_card_payload()["modules"]
+    requested_llm_provider = service.character.modules.llm.provider or llm_provider
+    requested_llm_model = service.character.modules.llm.model or llm_model
 
     manifest = load_manifest(service.character_id)
     display = manifest.get("display", {}) if isinstance(manifest, dict) else {}
     validation = validate_character_manifest(service.character_id)
-    display_mode = str(validation.get("requested_mode") or display.get("mode") or "placeholder")
+    display_mode = str(
+        service.character.modules.display.mode
+        or validation.get("requested_mode")
+        or display.get("mode")
+        or "placeholder"
+    )
     resolved_mode = str(validation.get("resolved_mode") or "placeholder")
     resource_ready = resolved_mode in {"live2d", "model3d", "image"}
     validation_notes = validation.get("warnings") or validation.get("errors") or []
 
-    requested_tts_provider = read_tts_provider()
+    requested_tts_provider = read_tts_provider(service.character.modules.tts.provider or None)
     try:
         resolved_tts_provider = resolve_tts_provider(requested_tts_provider)
         if resolved_tts_provider == "disabled":
@@ -75,7 +84,10 @@ async def health(
                 "configured": False,
             }
         else:
-            tts_client = create_tts_client(provider=resolved_tts_provider)
+            tts_client = create_tts_client(
+                provider=resolved_tts_provider,
+                voice=service.character.modules.tts.voice or None,
+            )
             tts_status = {
                 "status": "ok",
                 "provider": resolved_tts_provider,
@@ -95,6 +107,7 @@ async def health(
         character_id=service.character_id,
         character=service.character.name,
         version=service.character.version,
+        role_card_modules=role_card_modules,
         sidecar={
             "status": "ok",
             "api": "FastAPI",
@@ -103,6 +116,8 @@ async def health(
             "status": "ok" if llm_provider else "unconfigured",
             "provider": llm_provider,
             "model": llm_model,
+            "requested_provider": requested_llm_provider,
+            "requested_model": requested_llm_model,
             "message": str(getattr(llm, "message", "") or ""),
             "configured": bool(llm_provider),
         },

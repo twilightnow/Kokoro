@@ -10,6 +10,7 @@ import { sidecarHttpUrl } from './shared/sidecar'
 import { errorDetails, reportClientLog } from './shared/diagnostics'
 import type { CharacterDisplayConfig } from './types/chat'
 import { useSpeechOutput } from './composables/useSpeechOutput'
+import { useExpressionEvent } from './composables/useExpressionEvent'
 
 type TauriRuntimeWindow = Window & {
   __TAURI_INTERNALS__?: {
@@ -60,6 +61,7 @@ const chatStore = useChatStore()
 const { status, errorMessage, init, sendMessage, sendProactiveFeedback, syncState } = useChat()
 const { restorePosition, startTracking } = useWindowPosition()
 const { ttsEnabled, lipSyncLevel, speechError, toggleTts } = useSpeechOutput()
+const { currentExpressionEvent, resetExpressionEvent } = useExpressionEvent()
 
 const PASSTHROUGH_KEY = 'kokoro-passthrough-lock'
 const MAIN_ALWAYS_ON_TOP_KEY = 'kokoro-main-always-on-top'
@@ -189,6 +191,7 @@ onMounted(async () => {
             data.character_name,
             data.display ?? { mode: 'placeholder' },
           )
+          resetExpressionEvent()
           chatStore.setReply(`[ 已切换到 ${data.character_name} ]`)
         } catch (e) {
           console.error('[tray] character switch failed', e)
@@ -471,6 +474,7 @@ watch(
       <div class="sprite-area">
         <SpritePanel
           :mood="chatStore.mood"
+          :motion-name="currentExpressionEvent.motion.name"
           :character-id="chatStore.characterId"
           :character-name="chatStore.characterName"
           :display="chatStore.display"

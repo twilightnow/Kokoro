@@ -36,6 +36,7 @@ _client_log_buffer: Deque[Dict[str, Any]] = deque(maxlen=200)
 class DebugStateResponse(BaseModel):
     character_id: str
     character_name: str
+    role_card: Dict[str, Any]
     mood: str
     persist_count: int
     keyword: str
@@ -149,6 +150,7 @@ async def debug_state(service: ConversationService = Depends(get_service)) -> De
     return DebugStateResponse(
         character_id=service.character_id,
         character_name=service.character.name,
+        role_card=service.character.to_role_card_payload(),
         mood=state.mood,
         persist_count=state.persist_count,
         keyword=state.keyword,

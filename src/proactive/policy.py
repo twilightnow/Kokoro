@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from datetime import datetime
 
-from .action import InterventionLevel, ProactiveScene
+from .action import InterventionLevel, ProactiveScene, UrgencyLevel
 from .profile import ProactiveSettings
 
 _MODE_MIN_INTERVAL_SECONDS = {
@@ -118,6 +118,7 @@ class ProactivePolicy:
         character_id: str,
         now: datetime,
         privacy_dnd_reason: str = "",
+        urgency: UrgencyLevel = "normal",
     ) -> PolicyDecision:
         base_level = self._base_level(scene, settings)
         daily_count_before = self.daily_count(entries, character_id, now)
@@ -129,6 +130,7 @@ class ProactivePolicy:
         if not self._scene_enabled(scene, settings):
             return PolicyDecision(False, "silent", "scene_disabled", daily_count_before, cooldown_remaining)
 
+        # privacy_dnd（感知级别）对所有 urgency 生效，包括 critical
         if privacy_dnd_reason:
             return PolicyDecision(
                 False,
@@ -138,7 +140,8 @@ class ProactivePolicy:
                 cooldown_remaining,
             )
 
-        if settings.dnd_enabled and self._is_in_dnd(now, settings):
+        # critical urgency 可绕过时间窗口 DND
+        if settings.dnd_enabled and self._is_in_dnd(now, settings) and urgency != "critical":
             return PolicyDecision(False, "silent", "dnd", daily_count_before, cooldown_remaining)
 
         max_per_day = settings.max_per_day
